@@ -1,5 +1,5 @@
 import torch
-import torch.nn
+import torch.nn as nn
 import torchvision.models as models
 
 class DenseNet121_CIHMLC(nn.Module):
@@ -37,7 +37,7 @@ class DenseNet121_CIHMLC(nn.Module):
         # Append Custom Conv2D Layer
         # DenseNet121's feature extractor naturally outputs 1024 channels.
         # We compress this to 512 filters to extract finer structural details and reduce parameters
-        self.custom_conv = nn.Conv2D(
+        self.custom_conv = nn.Conv2d(
             in_channels=1024,
             out_channels=512,
             kernel_size=3,

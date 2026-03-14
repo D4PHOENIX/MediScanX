@@ -57,7 +57,9 @@ class CheXpertDataset(Dataset):
             idx = idx.tolist()
         
         # The CheXpert 'Path column contains the relative path
-        img_name = os.path.join(self.root_dir, self.annotations.iloc[idx]['Path'])
+        original_path = self.annotations.iloc[idx]['Path']
+        cleaned_path = original_path.replace('CheXpert-v1.0-small/', '')
+        img_name = os.path.join(self.root_dir, cleaned_path)
         
         # Load the image strictly in grayscale
         image = cv2.imread(img_name, cv2.IMREAD_GRAYSCALE)

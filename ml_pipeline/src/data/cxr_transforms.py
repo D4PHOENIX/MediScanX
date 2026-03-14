@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
-import torch
 from torchvision import transforms
+
 class ApplyCLAHE(object):
     """
     A custom PyTorch transform that applies Contrast Limited Adaptive Histogram Equalization (CLAHE) to a medical image.
@@ -12,7 +12,7 @@ class ApplyCLAHE(object):
     Attributes:
         clip_limit(float): Threshold for contrast limiting.
         tile_grid_size (tuple): Size of the grid for histogram equalization.
-        clahe(cv3.CLAHE): The instantiated OpenCV CLAHE object.
+        clahe(cv2.CLAHE): The instantiated OpenCV CLAHE object.
     """
     
     def __init__(self, clip_limit: float=2.0, tile_grid_size: tuple=(8,8)):
@@ -43,7 +43,7 @@ class ApplyCLAHE(object):
         if not isinstance(img, np.ndarray):
             raise TypeError(f"ApplyCLAHE expects a numpy.ndarray, but got{type(img)}")
         
-        # Ensure the image is 8-bit grayscale as equired by OpenCV CLAHE
+        # Ensure the image is 8-bit grayscale as required by OpenCV CLAHE
         if img.dtype != np.uint8:
             img = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX)
             img = img.astype(np.uint8)
@@ -75,9 +75,10 @@ class RadiographicPipeline:
         """
         return transforms.Compose([
             ApplyCLAHE(clip_limit=2.0, tile_grid_size=(8, 8)),
-            transforms.toPILImage(),
+            transforms.ToPILImage(),
             transforms.Resize(resize_dim),
             transforms.ToTensor(),
+            transforms.Lambda(lambda x: x.repeat(3, 1, 1) if x.shape[0] == 1 else x),
             # Normalize using full 3-channel ImageNet stats
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
