@@ -15,7 +15,7 @@ from src.cxr.data.datamodule import CXRDataModule
 from src.cxr.models.densenet121_cihmlc import DenseNet121_CIHMLC
 from src.cxr.models.losses import HBCELoss
 from src.cxr.utils.metrics import ClassWeightCalculator
-from ml_pipeline.src.cxr.engine.trainer import CIHMLCTrainer
+from src.cxr.engine.trainer import CIHMLCTrainer
 from src.core.telemetry import ExperimentTracker
 
 torch._dynamo.config.suppress_errors = True
@@ -55,12 +55,12 @@ def main():
     train_indices = train_loader.dataset.indices
     df_train = train_loader.dataset.dataset.annotations.iloc[train_indices]
     
-    pos_weights = ClassWeightCalculator.compute_pos_weights(df_train, num_classes=cfg.num_classes).to_device(cfg.device)
-    hbce_criterion = HBCELoss(pos_weights=pos_weights, hierarchy_pairs=cfg.HIERARCHY_PAIRS, penalty_weight=cfg.penalty_weight)
+    pos_weight = ClassWeightCalculator.compute_pos_weights(df_train, num_classes=cfg.num_classes).to(cfg.device)
+    hbce_criterion = HBCELoss(pos_weight=pos_weight, hierarchy_pairs=cfg.HIERARCHY_PAIRS, penalty_weight=cfg.penalty_weight)
     
     # Optimizer and Scheduler
     optimizer = optim.AdamW(model.parameters(), lr=cfg.learning_rate, weight_decay=cfg.weight_decay)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.1, patience=2)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, patience=2)
     
     # Execute Training Loop
     trainer = CIHMLCTrainer(

@@ -5,6 +5,7 @@ Defines hyperparameter dataclasses to ensure type safety and eliminate magic num
 """
 
 import os
+import cv2
 import torch
 from dataclasses import dataclass, field
 
@@ -43,7 +44,7 @@ class CXRTrainingConfig:
     patience: int = 5
     penalty_weight: float = 1.5
     log_steps: int = 500
-    weight_decay: int = 1e-4
+    weight_decay: float = 1e-4
     
     # Data Split Parameters
     train_size: float = 0.7

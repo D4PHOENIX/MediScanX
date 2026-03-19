@@ -13,9 +13,9 @@ from collections import OrderedDict
 # Adjust path to allow imports from the 'src' directory
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.cxr.config.inference_config import CXRInferenceConfig
+from src.cxr.config import CXRInferenceConfig
 from src.cxr.data.preprocessor import CXRInferencePreprocessor
-from src.cxr.models.densenet_cihmlc import DenseNet121_CIHMLC
+from src.cxr.models.densenet121_cihmlc import DenseNet121_CIHMLC
 from src.cxr.utils.explainability import GradCAMPlusPlus
 from src.cxr.engine.diagnostic_engine import CXRDiagnosticEngine
 

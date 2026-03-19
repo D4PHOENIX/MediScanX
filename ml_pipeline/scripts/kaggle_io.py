@@ -21,7 +21,7 @@ def csv_guided_nvme_transfer(
     num_workers: int = NUM_WORKERS
 ) -> None:
     """
-    Transfer CheXpert dataset form Kaggle Servers to local Kaggle Notebook NVMe storages
+    Transfer CheXpert dataset from Kaggle Servers to local Kaggle Notebook NVMe storages
     using CSV guides.
     
         Reads the train.csv and valid.csv files to get a list of image paths, then uses
@@ -47,7 +47,7 @@ def csv_guided_nvme_transfer(
     valid_csv_path = f"{source_root}/valid.csv"
     if os.path.exists(valid_csv_path):
         valid_df = pd.read_csv(valid_csv_path)
-        all_paths = pd.concat([train_df['Path'], valid_df['Path']]).values()
+        all_paths = pd.concat([train_df['Path'], valid_df['Path']]).values
     else:
         all_paths = train_df['Path'].values
     
@@ -74,7 +74,7 @@ def csv_guided_nvme_transfer(
         return True
     
     # Spawn 64 threads to saturate Kaggle's network bandwidth
-    with ThreadPoolExecutor(max_workers=64) as executor:
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
         list(tqdm(executor.map(copy_worker, copy_tasks), total=total_files, desc="Copying to /tmp/", unit="file"))
         
     # Finally, copy the CSV files themselves over to the SSD
@@ -84,5 +84,6 @@ def csv_guided_nvme_transfer(
         
     print("Transfer complete! Data is now cached on the local SSD for faster I/O.")
 
-# Execute the hyper-fast transfer using our global configuration
-csv_guided_nvme_transfer(CFG)
+if __name__ == "__main__":
+    # Execute the hyper-fast transfer using our global configuration
+    csv_guided_nvme_transfer()

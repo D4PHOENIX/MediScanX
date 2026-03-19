@@ -9,7 +9,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from src.cxr.config.inference_config import CXRInferenceConfig
+from src.cxr.config import CXRInferenceConfig
 
 class GradCAMPlusPlus:
     """
@@ -61,10 +61,10 @@ class GradCAMPlusPlus:
         if prob < 0.50:
             gradients = -gradients
             
-        # Higher Order Derivatives
+        # Grad-CAM++ Alpha Approximation (Element-wise powers of 1st-order gradients)
         activations = spatial_features.detach()
-        grad_2 = gradients.pow(2)
-        grad_3 = gradients.pow(3)
+        grad_2 = gradients.pow(2) 
+        grad_3 = gradients.pow(3) 
         
         # Calculate the denominator for the alpha weights using the original scaling behavior
         global_sum = activations * grad_3.sum(dim=(2, 3), keepdim=True)
@@ -130,5 +130,3 @@ class GradCAMPlusPlus:
         
         # Clip safely back to 8-bit integer space
         return np.clip(overlay, 0, 255).astype(np.uint8)
-    
-print("Adaptive Grad-CAM++ Interpretability Engine Initialized.")

@@ -54,7 +54,8 @@ class CIHMLCTrainer:
         
         self.best_auc = 0.0
         self.global_step = 0
-        self.scaler = torch.amp.GradScaler('cuda')
+        device_type = getattr(self.cfg.device, "type", "cuda")
+        self.scaler = torch.amp.GradScaler(enabled=(device_type == "cuda"))
         
         # Batched GPU Augmentations (Hardware Accelerated)
         self.gpu_train_aug = v2.Compose([

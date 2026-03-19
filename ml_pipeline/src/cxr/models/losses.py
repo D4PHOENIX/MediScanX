@@ -2,7 +2,9 @@
 Custom PyTorch loss functions for CXR diagnostics.
 Includes hierarchical constraint penalties (HBCELoss) to enforce anatomically logical predictions.
 """
+import torch
 import torch.nn as nn
+import torch.nn.Functional as F
 import torch.nn.functional as F
 
 class HBCELoss(nn.Module):

@@ -40,5 +40,3 @@ class ClassWeightCalculator:
         pos_weights = neg_counts / (pos_counts + 1e-7)
         
         return torch.tensor(pos_weights, dtype=torch.float32)
-
-print("Clinical Taxonomies and Weight Calculator defined successfully.")
