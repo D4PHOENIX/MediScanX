@@ -1,7 +1,10 @@
-ml_pipeline/data
+# Security
+.env
+
+# Artifacts & Data
 weights/
+/tmp/
+
+# Python Caches
 __pycache__/
-__pycache__/*
 *.pyc
-*.pyo
-*.pyd

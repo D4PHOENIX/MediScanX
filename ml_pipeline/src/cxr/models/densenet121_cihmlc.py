@@ -1,3 +1,7 @@
+"""
+Clinically-Inspired Hierarchical Multi-Label Classification (CIHMLC) architectures.
+Defines neural network structures optimized for CXR feature reuse and offline Grad-CAM++ compatibility.
+"""
 import torch
 import torch.nn as nn
 import torchvision.models as models
@@ -6,16 +10,18 @@ class DenseNet121_CIHMLC(nn.Module):
     """
     Clinically-Inspired Hierarchical Multi-Label Classification Model.
     
-    Utilizes a DenseNet121 backbone optimized for feature reuse. The architecture is
-    heavily modified with a custom convolutional head and a dual-output forward pass
-    to enable offline Explainable AI (Grad-CAM++) on mobile edge devices.
-
-    Args:
-        features (nn.Sequential): The pretrained DenseNet121 feature extractor.
+    Utilizes a DenseNet121 backbone optimized for feature reuse. The architecture features
+    a custom convolutional head and a dual-output forward pass to enable offline 
+    Explainable AI (Grad-CAM++) on mobile edge devices.
+    
+    Attributes:
+        features (nn.Sequential): The foundational DenseNet121 feature extractor blocks.
         custom_conv (nn.Conv2d): Dimensionality reduction and fine structural extraction layer.
+        bn (nn.BatchNorm2d): Batch normalization for the custom convolutional head.
         relu (nn.ReLU): Non-linear activation for the custom conv layer.
-        global_avg_pool (nn.AdaptiveAvgPool2d): GAP layer to preserve spatial context.
-        classifier (nn.Linear): The final dense layer mapping to the 14 clinical pathologies.
+        global_avg_pool (nn.AdaptiveAvgPool2d): Condenses spatial dimensions to (1, 1).
+        dropout (nn.Dropout): Regularization layer.
+        classifier (nn.Linear): The final dense layer mapping to the clinical pathologies.
     """
     def __init__(self, num_classes: int=14, pretrained: bool=True):
         """
@@ -50,6 +56,9 @@ class DenseNet121_CIHMLC(nn.Module):
         
         # Global Average Pooling: Condenses the spatial dimensions (H,W) to (1,1) while preserving the 512 feature maps
         self.global_avg_pool = nn.AdaptiveAvgPool2d((1, 1))
+
+        # Add dropout for regularization
+        self.dropout = nn.Dropout(p=0.4)
         
         # Final Classification layer
         self.classifier = nn.Linear(in_features=512, out_features=num_classes)
@@ -75,6 +84,9 @@ class DenseNet121_CIHMLC(nn.Module):
         # Pool, flatten and classify
         pooled = self.global_avg_pool(spatial_features)
         flattened = torch.flatten(pooled, 1)
+        
+        # Apply the dropout before the final layer
+        flattened = self.dropout(flattened)
         logits = self.classifier(flattened)
         
         # Return both artifacts for the inference engine
