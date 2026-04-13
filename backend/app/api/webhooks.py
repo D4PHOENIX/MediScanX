@@ -35,7 +35,7 @@ async def process_new_scan(payload: ScanResultPayload) -> dict:
         HTTPException: Automatically raised by the FastAPI with a 422 Unprocessable Entity
                         if the incoming data violates the Pydantic schema.
     """
-    logger.info(f"Recieved new synchronization payload: {repr(payload)}")
+    logger.info(f"Received new synchronization payload: {repr(payload)}")
     
     # RAG integration will be invoked here... 
     

@@ -40,7 +40,7 @@ class APIFactory:
         """
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],
+            allow_origins=self.settings.ALLOWED_ORIGINS,
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"]
@@ -89,10 +89,20 @@ class APIFactory:
             self._app = self._build_app()
         return self._app
     
-# Instantiate the factory and expose the ASGI application
-app = APIFactory()()
+# Function to instantiate the factory and expose the ASGI application
+def create_app() -> FastAPI:
+    """
+    Application factory function for ASGI servers.
+    Instantiates the APIFactory and returns the configured FastAPI instance.
+    """
+    return APIFactory()()
 
 if __name__ == "__main__":
     # Local execution entry point for the development environment
     logger.info("Starting Uvicorn development server...")
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app.main:create_app",
+                host="0.0.0.0",
+                port=8000,
+                reload=True,
+                factory=True
+            )

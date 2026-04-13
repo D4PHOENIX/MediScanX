@@ -10,5 +10,5 @@ pydantic-settings==2.5.2
 PyJWT==2.9.0
 cryptography==43.0.1
 
-# Environment ManagemSSent
+# Environment Management
 python-dotenv==1.0.1

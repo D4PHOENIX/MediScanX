@@ -2,7 +2,7 @@
 Pydantic validation contracts defining the API boundary.
 These Data Transfer Objects (DTOs) map precisely to the PostgreSQL schemas.
 """
-from pydantic import BaseMode, Field, UUID4, ConfigDict
+from pydantic import BaseModel, Field, UUID4, ConfigDict
 from typing import Optional, Dict, Any
 from datetime import datetime
 from enum import IntEnum
@@ -53,7 +53,7 @@ class ScanResultPayload(BaseModel):
     )
     
     image_url: Optional[str] = Field(
-        ...,
+        None,
         description="The URL mapping to the raw asset in the Supabase Storage bucket."
     )
     ai_diagnosis: Optional[str] = Field(
