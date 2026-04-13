@@ -80,7 +80,7 @@ class APIFactory:
     def __call__(self) -> FastAPI:
         """
         Dunder method allowing the factory instance to be called directly by ASGI servers.
-        Operates as a singleton accesshor for the FastAPI instance.
+        Operates as a singleton accessor for the FastAPI instance.
 
         Returns:
             FastAPI: The cached or newly built application instance.

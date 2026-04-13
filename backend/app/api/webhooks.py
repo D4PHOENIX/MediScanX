@@ -23,7 +23,8 @@ async def process_new_scan(payload: ScanResultPayload) -> dict:
     Webhook target for Supabase 'INSERT' triggers on the scan_results table.
 
     This function leverages the ScanResultPayload Pydantic model to automatically
-    parse, validate and type cast the incoming JSON string.
+    parse the incoming JSON request body into a validated model instance, applying
+    schema-based validation and field coercion as needed.
     
     Args:
         payload (ScanResultPayload): The strictly validated diagnostic data.

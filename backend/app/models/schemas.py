@@ -36,10 +36,10 @@ class ScanResultPayload(BaseModel):
     )
     user_id: UUID4 = Field(
         ...,
-        description="The UUID mapping to patient_records table."
+        description="The UUID of the related user record in the users."
     )
     doctor_id: Optional[UUID4] = Field(
-        ...,
+        None,
         description="The UUID of the attending physician who captured the scan."
     )
     
@@ -72,7 +72,7 @@ class ScanResultPayload(BaseModel):
         description="The probabilistic certainty of the edge model's prediction."
     )
     
-    metadata: Optional[Dict[str, Any]] = Field(
+    metadata: Dict[str, Any] = Field(
         default_factory=dict,
         description="An extensible JSON blob for future hardware sensor data."
     )

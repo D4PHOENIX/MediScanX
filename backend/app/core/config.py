@@ -16,7 +16,7 @@ class APISettings(BaseSettings):
     API_PREFIX: str = "/api/v1"
     DESCRIPTION: str = "High-throughput RAG and Sync Orchestration API for MediScanX."
     # Infrastructure Credentials
-    SUPABASE_URL : str
+    SUPABASE_URL: str
     SUPABASE_SERVICE_KEY: str
     
     # Pydantic V2 Configuration Dict
@@ -24,7 +24,8 @@ class APISettings(BaseSettings):
     
     # CORS Origins
     ALLOWED_ORIGINS = [
-    
+        "http://localhost:3000",
+        "http://127.0.0.1:3000"
     ]
     
     def __str__(self) -> str:
