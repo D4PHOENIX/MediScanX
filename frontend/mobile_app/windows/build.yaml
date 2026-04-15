@@ -1,0 +1,13 @@
+targets:
+  $default:
+    builders:
+      riverpod_generator|riverpod_generator:
+        generate_for:
+          - lib/**/*.dart
+        options:
+        # Riverpod code generation
+      drift_dev|drift_db_generator:
+        generate_for:
+          - lib/core/config/_drift_database_OLD.dart
+        options:
+        # Drift database generation
