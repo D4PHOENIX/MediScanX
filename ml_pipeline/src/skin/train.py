@@ -1,3 +1,5 @@
+import torch
+
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
@@ -43,13 +45,16 @@ def main():
     )
 
     # 5. Initialize Trainer
+    # Dynamically assign precision: 16-mixed for GPU, 32-true for CPU
+    dynamic_precision = "16-mixed" if torch.cuda.is_available() else "32-true"
+    
     trainer = pl.Trainer(
         max_epochs=config.max_epochs,
         logger=wandb_logger,
         callbacks=[early_stop_callback, checkpoint_callback],
         accelerator="auto",
         devices=1,
-        precision="16-mixed"
+        precision=dynamic_precision
     )
 
     # 6. Execute Training

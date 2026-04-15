@@ -96,6 +96,8 @@ class SkinDataModule(pl.LightningDataModule):
         
         if stage == 'fit' or stage is None:
             self.train_dataset = HAM10000Dataset(self.train_df, transform=self.train_transform)
+        
+        if stage in ('fit', 'validate', 'test') or stage is None:
             self.val_dataset = HAM10000Dataset(self.val_df, transform=self.val_transform)
 
     def train_dataloader(self) -> DataLoader:

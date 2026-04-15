@@ -22,24 +22,20 @@ class MobileNetGradCAM:
 
     def __call__(self, x: torch.Tensor, class_idx: int) -> np.ndarray:
         # Ensure gradients are enabled for Grad-CAM math
-        old_state = torch.is_grad_enabled()
-        torch.set_grad_enabled(True)
-        
-        logits = self.model(x)
-        self.model.zero_grad()
-        
-        # Target the specific class prediction
-        loss = logits[0, class_idx]
-        loss.backward()
-        
-        # Weight the activations by the gradients
-        pooled_gradients = torch.mean(self.gradients, dim=[0, 2, 3])
-        for i in range(self.activations.shape[1]):
-            self.activations[:, i, :, :] *= pooled_gradients[i]
+        with torch.enable_grad():
+            logits = self.model(x)
+            self.model.zero_grad()
             
-        heatmap = torch.mean(self.activations, dim=1).squeeze().cpu().detach().numpy()
-        heatmap = np.maximum(heatmap, 0) # Apply ReLU
-        heatmap /= np.max(heatmap) + 1e-8 # Normalize between 0 and 1
-        
-        torch.set_grad_enabled(old_state) # Restore previous grad state
-        return heatmap
+            # Target the specific class prediction
+            loss = logits[0, class_idx]
+            loss.backward()
+            
+            # Weight the activations by the gradients
+            pooled_gradients = torch.mean(self.gradients, dim=[0, 2, 3])
+            self.activations = self.activations * pooled_gradients.view(1, -1, 1, 1)
+                
+            heatmap = torch.mean(self.activations, dim=1).squeeze().cpu().detach().numpy()
+            heatmap = np.maximum(heatmap, 0) # Apply ReLU
+            heatmap /= np.max(heatmap) + 1e-8 # Normalize between 0 and 1
+            
+            return heatmap
