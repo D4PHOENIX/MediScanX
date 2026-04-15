@@ -53,7 +53,11 @@ class GradCAM1D:
         torch.backends.cudnn.enabled = False
 
         cloned_input = input_tensor.clone().detach().requires_grad_(True)
-        logits, _ = self.model(cloned_input)
+        
+        # Handle both model signatures (single Tensor or tuple/list)
+        model_output = self.model(cloned_input)
+        logits = model_output[0] if isinstance(model_output, (tuple, list)) else model_output
+        
         score = logits[0, target_class_idx]
         score.backward()
 

@@ -46,6 +46,7 @@ class ECGEvaluationDashboard:
         matrices = multilabel_confusion_matrix(targets_array, preds_array)
 
         fig, axes = plt.subplots(1, len(class_names), figsize=(28, 6))
+        axes = np.atleast_1d(axes)  # Ensure axes is always iterable, even for single-label runs
         fig.suptitle(
             "MediScanX 1D-CNN + Bi-LSTM: Clinical Evaluation Results (PTB-XL Dataset)",
             fontsize=24,

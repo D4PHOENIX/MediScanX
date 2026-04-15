@@ -50,17 +50,25 @@ class ECGInferenceEngine:
             "patient_id": os.path.basename(file_path),
         }
 
-    def visualize(self, results: dict[str, Any]) -> None:
-        """Render the ECG signal and corresponding Grad-CAM strip."""
+    def visualize(self, results: dict[str, Any], chunk_idx: int = 0) -> None:
+        """Render the ECG signal and corresponding Grad-CAM strip for a specific chunk."""
 
         lead_idx = int(results["lead_idx"])
         target_label = str(results["target_label"])
         patient_id = str(results["patient_id"])
-        signal_chunk = results["raw_signal"][: self.cfg.seq_length, lead_idx]
-        heatmap = results["heatmaps"][0]
         confidence = float(results["probabilities"][int(results["target_class_idx"])])
 
-        time_axis = np.linspace(0, 5, self.cfg.seq_length)
+        # Explicitly slice the signal to match the chosen chunk index
+        start_idx = chunk_idx * self.cfg.seq_length
+        end_idx = start_idx + self.cfg.seq_length
+        signal_chunk = results["raw_signal"][start_idx:end_idx, lead_idx]
+        
+        heatmap = results["heatmaps"][chunk_idx]
+
+        # Dynamic time axis based on configuration
+        duration_s = self.cfg.seq_length / self.cfg.sampling_rate
+        time_axis = np.linspace(0, duration_s, self.cfg.seq_length)
+        
         fig, axis = plt.subplots(figsize=(12, 4))
         axis.plot(time_axis, signal_chunk, color="black", linewidth=1.5, label="ECG Signal")
 
@@ -70,12 +78,12 @@ class ECGInferenceEngine:
             cmap="jet",
             aspect="auto",
             alpha=self.cfg.heatmap_alpha,
-            extent=[0, 5, ymin, ymax],
+            extent=[0, duration_s, ymin, ymax],
         )
 
         axis.set_title(
             f"MediScanX 1D Grad-CAM | Patient: {patient_id} | Target: {target_label} | "
-            f"Confidence: {confidence * 100:.1f}%",
+            f"Confidence: {confidence * 100:.1f}% | Chunk: {chunk_idx}",
             fontsize=14,
             fontweight="bold",
         )

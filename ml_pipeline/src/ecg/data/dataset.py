@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 
+from chromadb import logger
 import numpy as np
 import pandas as pd
 import torch
@@ -42,10 +43,8 @@ class PTBXLDataset(Dataset[tuple[Tensor, Tensor]]):
         try:
             signal, _ = wfdb.rdsamp(file_path)
         except Exception as exc:
-            print(f"Error loading {file_path}: {exc}")
-            empty_signal = torch.zeros(2, self.cfg.num_leads, self.cfg.seq_length)
-            empty_labels = torch.zeros(len(self.cfg.target_classes))
-            return empty_signal, empty_labels
+            logger.error(f"Error loading ECG record at {file_path}: {exc}")
+            raise RuntimeError(f"Critical data loading failure for {file_path}") from exc
 
         normalized = (signal - np.mean(signal, axis=0)) / (np.std(signal, axis=0) + 1e-6)
         first_chunk = torch.tensor(normalized[: self.cfg.seq_length, :].T, dtype=torch.float32)

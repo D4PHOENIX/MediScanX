@@ -9,11 +9,11 @@ import torch
 from torch import nn
 
 from src.ecg.config import ECGInferenceConfig, ECGTrainingConfig
-from MediScanX.ml_pipeline.src.ecg.data.preprocessor import ECGPreprocessor
-from MediScanX.ml_pipeline.src.ecg.engine.diagnostic_engine import ECGInferenceEngine
-from MediScanX.ml_pipeline.src.ecg.models.cnn_bilstm import MediScanXECGClassifier
-from MediScanX.ml_pipeline.src.ecg.models.legacy_resnet_bilstm import LegacyGradCAMECGClassifier
-from MediScanX.ml_pipeline.src.ecg.utils.explainability import GradCAM1D
+from src.ecg.data.preprocessor import ECGPreprocessor
+from src.ecg.engine.diagnostic_engine import ECGInferenceEngine
+from src.ecg.models.cnn_bilstm import MediScanXECGClassifier
+from src.ecg.models.legacy_resnet_bilstm import LegacyGradCAMECGClassifier
+from src.ecg.utils.explainability import GradCAM1D
 
 
 def load_model(cfg: ECGInferenceConfig) -> tuple[nn.Module, nn.Module]:

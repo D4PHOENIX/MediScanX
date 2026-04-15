@@ -6,7 +6,7 @@ Binds configuration, data routing, model architecture, and trainer execution.
 from __future__ import annotations
 
 from src.ecg.config import ECGTrainingConfig
-from MediScanX.ml_pipeline.src.ecg.engine.trainer import ECGTrainingPipeline
+from src.ecg.engine.trainer import ECGTrainingPipeline
 
 
 def main() -> None:
