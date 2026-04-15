@@ -62,13 +62,16 @@ class ECGInferenceEngine:
         start_idx = chunk_idx * self.cfg.seq_length
         end_idx = start_idx + self.cfg.seq_length
         signal_chunk = results["raw_signal"][start_idx:end_idx, lead_idx]
-        
+       
         heatmap = results["heatmaps"][chunk_idx]
-
         # Dynamic time axis based on configuration
-        duration_s = self.cfg.seq_length / self.cfg.sampling_rate
+        sampling_rate = getattr(self.cfg, "sampling_rate", getattr(self.cfg, "sample_rate", None))
+        if sampling_rate is None:
+            raise AttributeError(
+                "ECGInferenceConfig must define either 'sampling_rate' or 'sample_rate'."
+            )
+        duration_s = self.cfg.seq_length / sampling_rate
         time_axis = np.linspace(0, duration_s, self.cfg.seq_length)
-        
         fig, axis = plt.subplots(figsize=(12, 4))
         axis.plot(time_axis, signal_chunk, color="black", linewidth=1.5, label="ECG Signal")
 

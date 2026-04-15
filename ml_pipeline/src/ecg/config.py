@@ -58,6 +58,7 @@ class ECGInferenceConfig:
         "/kaggle/input/datasets/khyeh0719/ptb-xl-dataset/"
         "ptb-xl-a-large-publicly-available-electrocardiography-dataset-1.0.1/"
     )
+    sample_rate: int = 100
     seq_length: int = 500
     full_signal_length: int = 1000
     num_leads: int = 12

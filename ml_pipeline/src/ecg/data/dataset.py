@@ -5,11 +5,13 @@ Loads raw signals, normalizes them, and splits each record into two chunks.
 
 from __future__ import annotations
 
+import logging
 import os
 
-from chromadb import logger
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 import torch
 import wfdb
 from torch import Tensor
