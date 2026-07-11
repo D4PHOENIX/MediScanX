@@ -1,7 +1,7 @@
 # =============================================================================
 # MediScanX — cxr_service CI/CD Pipeline
 # =============================================================================
-# Trigger : Pull Requests to `dev` branch touching any file under cxr_service/**
+# Trigger : Pull Requests to `dev` branch touching any file under backend/cxr_service/**
 # Runner  : ubuntu-latest
 # Toolchain: uv (astral-sh) with optimal PyTorch CPU wheel caching
 # Jobs    : 1. test        — mocked pytest suite (required gate to merge)
@@ -31,12 +31,12 @@ on:
         branches:
             - main
         paths:
-            - "cxr_service/**"
+            - "backend/cxr_service/**"
     pull_request:
         branches:
             - dev
         paths:
-            - "cxr_service/**"
+            - "backend/cxr_service/**"
 
 # Cancel any superseded run for the same PR branch immediately.
 concurrency:
@@ -57,7 +57,7 @@ jobs:
         runs-on: ubuntu-latest
         defaults:
             run:
-                working-directory: cxr_service
+                working-directory: backend/cxr_service
 
         env:
             # -----------------------------------------------------------------------
@@ -91,7 +91,7 @@ jobs:
               with:
                   version: ${{ env.UV_VERSION }}
                   enable-cache: true
-                  cache-dependency-glob: "cxr_service/uv.lock"
+                  cache-dependency-glob: "backend/cxr_service/uv.lock"
 
             # -----------------------------------------------------------------------
             - name: Set up Python ${{ env.PYTHON_VERSION }}
@@ -142,7 +142,7 @@ jobs:
               uses: actions/upload-artifact@v4
               with:
                   name: cxr-pytest-results-${{ github.run_number }}
-                  path: cxr_service/pytest-results.xml
+                  path: backend/cxr_service/pytest-results.xml
                   retention-days: 7
 
     # =============================================================================
@@ -169,8 +169,8 @@ jobs:
             - name: Build cxr_service Docker image
               uses: docker/build-push-action@v6
               with:
-                  context: ./cxr_service
-                  file: ./cxr_service/Dockerfile
+                  context: ./backend/cxr_service
+                  file: ./backend/cxr_service/Dockerfile
                   push: false
                   load: true
                   no-cache: true

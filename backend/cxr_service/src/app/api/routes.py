@@ -2,8 +2,9 @@ import os
 import tempfile
 from pathlib import Path
 from typing import Dict, Any, Set, Optional
-from fastapi import APIRouter, File, UploadFile, HTTPException, Depends
+from fastapi import APIRouter, File, UploadFile, Depends
 from fastapi.responses import JSONResponse
+from app.core.exceptions import CXREngineNotReadyError, CXRBaseException
 from app.engine.cxr_engine import CXREngine
 
 # Global engine reference – populated during startup by main.py
@@ -18,10 +19,10 @@ async def get_engine() -> CXREngine:
         CXREngine: The fully initialized CXR diagnostic engine.
 
     Raises:
-        HTTPException: If the engine is still loading or is otherwise unavailable.
+        CXREngineNotReadyError: If the engine is still loading or is otherwise unavailable.
     """
     if cxr_engine is None or not cxr_engine.ready:
-        raise HTTPException(status_code=503, detail="CXR engine is still loading or unavailable.")
+        raise CXREngineNotReadyError()
     return cxr_engine
 
 
@@ -33,13 +34,10 @@ async def healthz() -> Dict[str, str]:
         Dict[str, str]: A dictionary indicating the health status of the service.
 
     Raises:
-        HTTPException: If the diagnostic engine is unavailable or uninitialized.
+        CXREngineNotReadyError: If the diagnostic engine is unavailable or uninitialized.
     """
     if cxr_engine is None or not cxr_engine.ready:
-        raise HTTPException(
-            status_code=503,
-            detail="CXR engine is still loading or unavailable.",
-        )
+        raise CXREngineNotReadyError()
     return {"status": "healthy"}
 
 @router.post("/predict")
@@ -58,12 +56,12 @@ async def predict(file: UploadFile = File(...), engine: CXREngine = Depends(get_
         JSONResponse: A JSON response containing the top‑k findings, original image, predicted diagnoses, and patient ID.
 
     Raises:
-        HTTPException: If the uploaded file is not a supported image format.
+        CXRBaseException: If the uploaded file is not a supported image format.
     """
     # Content‑type guard
     allowed: Set[str] = {"image/jpeg", "image/png", "image/jpg"}
     if file.content_type not in allowed:
-        raise HTTPException(status_code=415, detail="Only JPEG/PNG images are supported.")
+        raise CXRBaseException(status_code=415, message="Only JPEG/PNG images are supported.")
 
     # Persist the upload to a temporary file so OpenCV can read it
     suffix: str = Path(file.filename or "").suffix or ".jpg"

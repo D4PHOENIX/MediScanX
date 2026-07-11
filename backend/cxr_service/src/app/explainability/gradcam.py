@@ -1,12 +1,15 @@
 """Grad-CAM++ explainability engine for CXR inference."""
 
+from typing import Any, Dict, List, Tuple
+
 import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
-
-from app.engine.config import CXRInferenceConfig
-from app.exceptions import ModelInferenceError
+from app.core.config import Settings as CXRInferenceConfig
+from app.core.exceptions import ModelInferenceError
+from torch import Tensor
+from torchvision.models.densenet import DenseNet
 
 
 class GradCAMPlusPlus:
