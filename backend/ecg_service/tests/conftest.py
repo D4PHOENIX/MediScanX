@@ -71,6 +71,7 @@ async def test_app():
     async def _fake_initialize(self):
         """Stub initialize — marks engine ready without loading weights."""
         self.ready = True
+        self._onnx_session = MagicMock()
         self._diagnostic_engine = MagicMock()
 
     with patch("app.engine.ecg_engine.ECGEngine.initialize", _fake_initialize), \

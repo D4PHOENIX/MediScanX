@@ -64,5 +64,5 @@ class Settings(BaseSettings):
     colormap: str = "jet"
 
     model_config: SettingsConfigDict = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore", arbitrary_types_allowed=True
+        env_file=".env", env_file_encoding="utf-8", extra="ignore", arbitrary_types_allowed=True, populate_by_name=True
     )

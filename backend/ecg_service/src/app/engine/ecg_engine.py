@@ -1,6 +1,7 @@
 """Asynchronous ECG inference engine – main public API."""
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -12,6 +13,8 @@ from app.core.exceptions import ECGInferenceError
 from app.core.config import Settings
 from .preprocessor import ECGPreprocessor
 from .diagnostic_engine import ECGDiagnosticEngine
+
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 class ECGEngine:
@@ -47,6 +50,11 @@ class ECGEngine:
         await loop.run_in_executor(None, self._load)
         self.ready = True
 
+    @property
+    def is_servable(self) -> bool:
+        """Return True if at least one model backend is loaded."""
+        return self._onnx_session is not None or self._model is not None
+
     def _load(self) -> None:
         """Synchronous loading procedure.
 
@@ -58,23 +66,23 @@ class ECGEngine:
         """
         _ort_available: bool
         try:
-            import onnxruntime as ort  
+            import onnxruntime as ort  # noqa: F811
             _ort_available = True
         except ImportError:
             _ort_available = False
 
-        # 1. ONNX session 
+        # 1. ONNX session ------------------------------------------------------
         onnx_path: Path = Path(self.cfg.onnx_model_path)
         if _ort_available and onnx_path.exists():
             try:
                 self._onnx_session = ort.InferenceSession(str(onnx_path))
             except Exception as e:
-                print(f"Warning: Failed to load ONNX model: {e}")
+                logger.warning(f"Failed to load ONNX model: {e}")
                 self._onnx_session = None
         else:
             self._onnx_session = None
 
-        # 2. PyTorch model (fallback & Grad-CAM) 
+        # 2. PyTorch model (fallback & Grad-CAM) -------------------------------
         ckpt_path: Path = Path(self.cfg.pytorch_ckpt_path)
         if ckpt_path.exists():
             try:
@@ -91,17 +99,17 @@ class ECGEngine:
         else:
             self._model = None
 
-        # Preprocessor 
+        # 3. Preprocessor ------------------------------------------------------
         self._preprocessor = ECGPreprocessor(self.cfg)
 
-        # XAI engine (only when a PyTorch model is available) 
+        # 4. XAI engine (only when a PyTorch model is available) ---------------
         if self._model is not None:
             from app.explainability.gradcam_1d import GradCAM1D
             self._xai_engine = GradCAM1D(self.cfg, self._model)
         else:
             self._xai_engine = None
 
-        # Diagnostic engine 
+        # 5. Diagnostic engine -------------------------------------------------
         self._diagnostic_engine = ECGDiagnosticEngine(
             self.cfg,
             self._onnx_session,

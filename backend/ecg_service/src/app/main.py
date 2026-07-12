@@ -46,11 +46,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # startup
     logger.info("Initialising ECG inference engine …")
     try:
-        settings: Settings = Settings()
-        cfg: Settings = Settings(
-            onnx_model_path=settings.ecg_onnx_path,
-            pytorch_ckpt_path=settings.ecg_ckpt_path,
-        )
+        cfg: Settings = Settings()
         engine_instance = ECGEngine(cfg=cfg)
         await engine_instance.initialize()
         routes.ecg_engine = engine_instance

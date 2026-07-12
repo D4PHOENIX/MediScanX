@@ -11,7 +11,7 @@ from httpx import AsyncClient
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_configuration_loading() -> None:
-    """Verify that Settings and Settings read the correct env vars
+    """Verify that Settings reads the correct env vars
     and expose the expected architecture constants.
     """
     import os
@@ -201,6 +201,8 @@ async def test_engine_not_ready_returns_503(test_app, async_client: AsyncClient)
 async def test_healthz_when_ready(test_app, async_client: AsyncClient) -> None:
     """Assert /healthz returns 200 and status=healthy when engine is ready."""
     response = await async_client.get("/healthz")
+    assert response.status_code == 200
+    assert response.json() == {"status": "healthy"}
 # ---------------------------------------------------------------------------
 #  Test 8 — Preprocessor Fault Injection (Missing Leads / Corrupt Dimensions)
 # ---------------------------------------------------------------------------

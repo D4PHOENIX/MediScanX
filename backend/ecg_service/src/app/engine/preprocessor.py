@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import cv2
 import numpy as np
@@ -260,13 +260,13 @@ class ECGPreprocessor:
             InvalidLeadCountError: If incorrect number of leads extracted.
             SignalLengthMismatchError: If the expected length doesn't match.
         """
-        # Remove pink grid
+        # 1. Remove pink grid
         binary_img: np.ndarray = self._remover.remove_grid(image_path)
 
-        # Slice into 12 lead images
+        # 2. Slice into 12 lead images
         lead_images: Dict[str, np.ndarray] = self._slicer.slice_image(binary_img)
 
-        # Digitise each lead in standard clinical order
+        # 3. Digitise each lead in standard clinical order
         lead_order: List[str] = [
             'I', 'aVR', 'V1', 'V4',
             'II', 'aVL', 'V2', 'V5',

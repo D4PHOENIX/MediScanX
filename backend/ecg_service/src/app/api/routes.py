@@ -23,7 +23,7 @@ async def get_engine() -> ECGEngine:
     Raises:
         ECGEngineNotReadyError: If the engine is still loading or is otherwise unavailable.
     """
-    if ecg_engine is None or not ecg_engine.ready:
+    if ecg_engine is None or not ecg_engine.ready or not ecg_engine.is_servable:
         raise ECGEngineNotReadyError()
     return ecg_engine
 
@@ -38,7 +38,7 @@ async def healthz() -> Dict[str, str]:
     Raises:
         ECGEngineNotReadyError: If the diagnostic engine is unavailable or uninitialized.
     """
-    if ecg_engine is None or not ecg_engine.ready:
+    if ecg_engine is None or not ecg_engine.ready or not ecg_engine.is_servable:
         raise ECGEngineNotReadyError()
     return {"status": "healthy"}
 
