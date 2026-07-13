@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ecg-service"
+version = "0.1.0"
+description = "ECG diagnostic microservice — CNN-BiLSTM inference engine"
+requires-python = ">=3.10"
+dependencies = [
+    # --- API & Web Framework ---
+    "fastapi>=0.100",
+    "uvicorn[standard]>=0.22",
+    # --- Data Validation & Settings ---
+    "pydantic>=2",
+    "pydantic-settings",
+    "python-multipart",
+    # --- Machine Learning & AI ---
+    "numpy>=1.24",
+    "opencv-python-headless>=4.8",
+    "pandas",
+    "torch>=2.0",
+    "torchvision",
+    "wfdb",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "httpx>=0.28.1",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }
+
+[project.optional-dependencies]
+dev = [
+    "httpx>=0.25",
+    "pytest>=7.4",
+    "pytest-asyncio>=0.23",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/app"]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated:DeprecationWarning",
+    "ignore::UserWarning",
+    "ignore::DeprecationWarning"
+]
+
+
