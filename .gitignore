@@ -71,6 +71,7 @@ uv.lock.bak
 *.tflite
 *.npy
 *.pth
+*.pt
 # But explicitly ignore the ones that we don't want checked in yet
 # weights/ is allowed, but keep large weights out
 
