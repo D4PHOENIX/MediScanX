@@ -95,6 +95,7 @@ async def test_app():
     mock_checkpointer = AsyncMock()
 
     from contextlib import asynccontextmanager
+    from unittest.mock import patch
 
     @asynccontextmanager
     async def _fake_build_graph(*args, **kwargs):
@@ -113,8 +114,10 @@ async def test_app():
     try:
         from app.main import app
 
-        async with app.router.lifespan_context(app):
-            yield app
+        with patch("app.main.asyncpg.create_pool", new_callable=AsyncMock) as mock_pool:
+            mock_pool.return_value = AsyncMock()
+            async with app.router.lifespan_context(app):
+                yield app
     finally:
         # Restore sys.modules to its original state so other test sessions
         # or importlib.reload() calls are not affected.

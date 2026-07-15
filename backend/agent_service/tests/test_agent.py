@@ -55,7 +55,7 @@ async def test_sse_compliance(test_app, async_client: AsyncClient) -> None:
         "/chat",
         json={
             "messages": [{"role": "user", "content": "Analyze patient 123."}],
-            "patient_id": "patient-123",
+            "patient_id": "00000000-0000-0000-0000-000000000123",
         },
     )
 
@@ -90,7 +90,7 @@ async def test_sse_streaming_error_handling(test_app, async_client: AsyncClient)
         "/chat",
         json={
             "messages": [{"role": "user", "content": "Analyze"}],
-            "patient_id": "patient-err",
+            "patient_id": "00000000-0000-0000-0000-000000000eee",
         },
     )
 
@@ -123,7 +123,7 @@ async def test_thread_id_isolation(test_app, async_client: AsyncClient) -> None:
 
     test_app.state.graph.astream_events = _capture_config
 
-    for patient_id in ("patient-A", "patient-B"):
+    for patient_id in ("00000000-0000-0000-0000-00000000000a", "00000000-0000-0000-0000-00000000000b"):
         await async_client.post(
             "/chat",
             json={
@@ -134,8 +134,8 @@ async def test_thread_id_isolation(test_app, async_client: AsyncClient) -> None:
 
     assert len(captured_configs) == 2
     thread_ids = [c["configurable"]["thread_id"] for c in captured_configs]
-    assert thread_ids[0] == "patient-A"
-    assert thread_ids[1] == "patient-B"
+    assert thread_ids[0] == "00000000-0000-0000-0000-00000000000a"
+    assert thread_ids[1] == "00000000-0000-0000-0000-00000000000b"
     assert thread_ids[0] != thread_ids[1], "Different patients must have different thread_ids"
 
 
@@ -356,7 +356,7 @@ async def test_error_envelope_format(test_app, async_client: AsyncClient) -> Non
         "/chat",
         json={
             "messages": [{"role": "user", "content": "test"}],
-            "patient_id": "envelope-test",
+            "patient_id": "00000000-0000-0000-0000-000000000fff",
         },
     )
 
@@ -400,7 +400,7 @@ async def test_engine_not_ready_guard() -> None:
             "/chat",
             json={
                 "messages": [{"role": "user", "content": "test"}],
-                "patient_id": "00000000-0000-0000-0000-000000000001",
+                "patient_id": "00000000-0000-0000-0000-000000000eee",
             },
         )
 
