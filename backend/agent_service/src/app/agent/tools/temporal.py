@@ -71,7 +71,7 @@ async def _temporal_progression_impl(
         Dict[str, Any]: Dictionary containing ``l2_distance``, ``interpretation``,
         and ``is_significant`` flag.
     """
-    # --- Fetch current scan -------------------------------------------------
+    # Fetch current scan 
     current = await conn.fetchrow(
         """
         SELECT embedding, modality, primary_condition, patient_id
@@ -101,7 +101,7 @@ async def _temporal_progression_impl(
     condition = current["primary_condition"]
     patient_id = current["patient_id"]
 
-    # --- Retrieve previous vector -------------------------------------------
+    # Retrieve previous vector 
     if previous_scan_id is not None:
         prev_row = await conn.fetchrow(
             "SELECT embedding FROM patient_scans WHERE id = $1", previous_scan_id
@@ -151,7 +151,7 @@ async def _temporal_progression_impl(
             "is_significant": None,
         }
 
-    # --- Compute L2 distance ------------------------------------------------
+    # Compute L2 distance 
     distance = math.dist(current_vector, prev_vector)
     significant = distance > _SIGNIFICANT_THRESHOLD
     interpretation = (

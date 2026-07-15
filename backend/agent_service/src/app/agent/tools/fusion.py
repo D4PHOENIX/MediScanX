@@ -155,7 +155,7 @@ async def _run_fusion_queries(
                 return {"message": "No valid scans found for the provided IDs."}
             return result
 
-        # ----- IDs missing: query recent scans -----
+        # IDs missing: query recent scans 
         rows = await conn.fetch(
             """
             SELECT id, modality, predicted_class, created_at

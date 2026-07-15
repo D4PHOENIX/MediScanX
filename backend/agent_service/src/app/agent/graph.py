@@ -180,7 +180,7 @@ async def build_graph(
         Tuple[Any, AsyncPostgresSaver]: A tuple of ``(compiled_graph, checkpointer)`` where the compiled graph
         is ready to serve requests and the checkpointer owns the DB connection pool.
     """
-    # --- LLM ---
+    # LLM setup
     llm = ChatGoogleGenerativeAI(
         model=google_model,
         api_key=gemini_api_key,
@@ -189,7 +189,7 @@ async def build_graph(
     )
     model_with_tools = llm.bind_tools(TOOLS)
 
-    # --- Checkpointer ---
+    # Checkpointer 
     # AsyncPostgresSaver maps to the checkpoints / checkpoint_blobs /
     # checkpoint_writes tables defined in schema/0001_initial_schema.sql.
     import psycopg_pool
