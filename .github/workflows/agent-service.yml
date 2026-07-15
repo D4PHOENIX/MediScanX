@@ -1,71 +1,63 @@
 # =============================================================================
-# MediScanX — skin_service CI/CD Pipeline
+# MediScanX — agent_service CI/CD Pipeline
 # =============================================================================
-# Trigger : Pull Requests to `dev` branch touching any file under skin_service/**
+# Trigger : Pull Requests targeting the `dev` branch that touch any file
+#            under agent_service/**.
 # Runner  : ubuntu-latest
-# Toolchain: uv (astral-sh) with optimal PyTorch CPU wheel caching
-# Jobs    : 1. test        — mocked pytest suite (required gate to merge)
-#           2. docker-build — multi-stage Dockerfile dry-run (no push)
-#
-# Mocking strategy
-# --------------------------------------
-# The model files are loaded during initialization, guarded by a
-# try/except that falls back cleanly.
-# In CI we set SKIN_WEIGHTS_PATH to a /dev/null/... path so that
-# Path(model_path) does not exist → clean fallback, no disk I/O,
-# no mocked weights needed.
-#
-# PyTorch caching strategy
-# ------------------------
-# torchvision + torch CPU wheels are large (~500 MB combined).  We cache
-# via astral-sh/setup-uv keyed on uv.lock.  Unchanged lockfile = warm
-# restore in seconds.  The [tool.uv.sources] pytorch-cpu index in
-# pyproject.toml pins CPU-only builds.
+# Toolchain: uv (astral-sh) for fast, lock-file-reproducible installs
+# Jobs    : 1. test        — run mocked pytest suite (required gate to merge)
+#           2. docker-build — dry-run multi-stage Dockerfile (no push)
 # =============================================================================
 
-name: skin-service CI
+name: agent-service CI
 
 on:
     push:
         branches:
             - main
         paths:
-            - "backend/skin_service/**"
+            - "backend/agent_service/**"
     pull_request:
         branches:
             - dev
         paths:
-            - "backend/skin_service/**"
+            - "backend/agent_service/**"
 
-# Cancel any superseded run for the same PR branch immediately.
+# Cancel any in-flight run for the same PR branch to save CI minutes.
 concurrency:
-    group: skin-service-${{ github.head_ref }}
+    group: agent-service-${{ github.head_ref }}
     cancel-in-progress: true
 
 env:
+    # Pinned uv version — bump intentionally so upgrades are reviewed.
     UV_VERSION: "0.5.18"
+    # Python version must match requires-python in pyproject.toml
     PYTHON_VERSION: "3.10"
-    IMAGE_NAME: mediscanx/skin-service
+    # Docker image name (no registry push in PR pipelines)
+    IMAGE_NAME: mediscanx/agent-service
 
 # =============================================================================
 # JOB 1 — Test
 # =============================================================================
 jobs:
     test:
-        name: "Pytest Suite (mocked weights + thresholds)"
+        name: "Pytest Suite (mocked)"
         runs-on: ubuntu-latest
         defaults:
             run:
-                working-directory: backend/skin_service
+                working-directory: backend/agent_service
 
         env:
-            # -----------------------------------------------------------------------
-            # /dev/null/... paths guarantee:
-            #   - Path.exists() → False  (no FileNotFoundError from missing mounts)
-            #   - Engine initialization falls back gracefully
-            #   - No physical .pth files need to be present in the runner
-            # -----------------------------------------------------------------------
-            SKIN_WEIGHTS_PATH: "/dev/null/mock_weights.pth"
+            # Safe dummy values — real credentials are never needed for the mocked
+            # test suite, but the application import chain reads them at module load.
+            GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || 'ci-dummy-gemini-key' }}
+            DATABASE_URL: ${{ secrets.DATABASE_URL || 'postgresql://ci_user:ci_pass@localhost:5432/ci_db' }}
+            SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'http://mock-supabase' }}
+            SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || 'mock-service-role-key' }}
+            CXR_SERVICE_URL: "http://mock-cxr:8001/predict"
+            ECG_SERVICE_URL: "http://mock-ecg:8002/predict"
+            SKIN_SERVICE_URL: "http://mock-skin:8003/predict"
+            GOOGLE_MODEL: "gemini-2.5-flash"
 
         steps:
             # -----------------------------------------------------------------------
@@ -73,16 +65,12 @@ jobs:
               uses: actions/checkout@v4
 
             # -----------------------------------------------------------------------
-            # Dual-layer PyTorch caching:
-            #   1. Wheel download cache (~/.cache/uv) keyed on uv.lock hash
-            #   2. Virtualenv restore when lock is unchanged
-            # pytorch-cpu index pins CPU-only torch + torchvision (~500 MB total).
             - name: Install uv ${{ env.UV_VERSION }}
               uses: astral-sh/setup-uv@v5
               with:
                   version: ${{ env.UV_VERSION }}
                   enable-cache: true
-                  cache-dependency-glob: "backend/skin_service/uv.lock"
+                  cache-dependency-glob: "agent_service/uv.lock"
 
             # -----------------------------------------------------------------------
             - name: Set up Python ${{ env.PYTHON_VERSION }}
@@ -99,8 +87,8 @@ jobs:
                   curl -I -v -m 10 https://github.com || echo "GitHub unreachable"
 
             # -----------------------------------------------------------------------
-            # --frozen prevents lock-file mutation (reproducible CI builds).
-            # Dev extras supply pytest + pytest-asyncio + httpx.
+            # --frozen ensures the lock file is never mutated in CI.
+            # Dev extras are included (no --no-dev) because pytest lives there.
             # Hardened against transient drops with UV_HTTP_TIMEOUT and shell retries.
             - name: Install dependencies (uv sync --frozen)
               env:
@@ -128,12 +116,12 @@ jobs:
                     --junitxml=pytest-results.xml
 
             # -----------------------------------------------------------------------
-            - name: Upload pytest results
+            - name: Upload test results
               if: always() && !env.ACT
               uses: actions/upload-artifact@v4
               with:
-                  name: skin-pytest-results-${{ github.run_number }}
-                  path: backend/skin_service/pytest-results.xml
+                  name: pytest-results-${{ github.run_number }}
+                  path: backend/agent_service/pytest-results.xml
                   retention-days: 7
 
     # =============================================================================
@@ -154,14 +142,14 @@ jobs:
               uses: docker/setup-buildx-action@v3
 
             # -----------------------------------------------------------------------
-            # Full multi-stage build without pushing.
-            # --load exports to the local daemon so the smoke test below can run.
-            # --no-cache exercises every layer on every PR (catches stale COPY paths).
-            - name: Build skin_service Docker image
+            # Build both stages (builder + runtime) without pushing to any registry.
+            # --load exports to local Docker daemon for the smoke test below.
+            # --no-cache validates the full build path on every PR run.
+            - name: Build agent_service Docker image
               uses: docker/build-push-action@v6
               with:
-                  context: ./backend/skin_service
-                  file: ./backend/skin_service/Dockerfile
+                  context: ./backend/agent_service
+                  file: ./backend/agent_service/Dockerfile
                   push: false
                   load: true
                   no-cache: true
@@ -171,14 +159,13 @@ jobs:
                       org.opencontainers.image.source=${{ github.repository }}
 
             # -----------------------------------------------------------------------
-            # Smoke-test: verify the full Python import chain resolves inside the
-            # runtime image without starting the ASGI server.  This catches:
-            #   - Dockerfile COPY path regressions (Bug #10 pattern)
-            #   - Missing dependencies not caught at build time
-            #   - Absence of print() calls in __post_init__ (Bug #2 regression)
-            - name: Smoke-test image import chain
+            # Verify the Python import chain resolves cleanly inside the image.
+            - name: Smoke-test image entrypoint
               run: |
                   docker run --rm \
-                    -e SKIN_WEIGHTS_PATH=/dev/null/mock_weights.pth \
+                    -e GEMINI_API_KEY=ci-dummy \
+                    -e DATABASE_URL=postgresql://ci:ci@localhost/ci \
+                    -e SUPABASE_URL=http://localhost \
+                    -e SUPABASE_SERVICE_ROLE_KEY=ci-dummy \
                     ${{ env.IMAGE_NAME }}:pr-${{ github.event.pull_request.number }} \
-                    python -c "import sys, io, contextlib; sys.path.insert(0, '/app/src'); from app.core.config import Settings, SkinInferenceConfig; from app.core.exceptions import ExceptionRegistry; captured = io.StringIO(); ctx = contextlib.redirect_stdout(captured); ctx.__enter__(); cfg = Settings(); inf_cfg = SkinInferenceConfig(); ctx.__exit__(None, None, None); assert captured.getvalue() == '', f'__post_init__ still calls print(): {captured.getvalue()!r}'; assert cfg.num_classes == 7, f'Wrong num_classes: {cfg.num_classes}'; assert cfg.image_size == 224; print('Import OK — Settings, ExceptionRegistry load cleanly.'); print(f'num_classes={cfg.num_classes}  image_size={cfg.image_size}'); print('No print() calls detected in __post_init__ (Bug #2 regression check passed.')"
+                    python -c "import sys; sys.path.insert(0, '/app/src'); from app.core.config import AgentConfig; import app.main; print('Import OK')"
