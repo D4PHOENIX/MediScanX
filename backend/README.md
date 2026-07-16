@@ -12,13 +12,13 @@ Welcome to the central backend repository for **MediScanX**, a highly optimized,
 
 ## Table of Contents
 
-- [Architectural Topology & Traffic Flow](#architectural-topology--traffic-flow)
+- [Architectural Topology &amp; Traffic Flow](#architectural-topology--traffic-flow)
 - [Core Technology Stack](#core-technology-stack)
 - [Unified Engineering Standards](#unified-engineering-standards)
 - [Getting Started](#getting-started)
-  - [Prerequisites](#prerequisites)
-  - [Global Orchestration](#global-orchestration)
-  - [Local Development](#local-development)
+    - [Prerequisites](#prerequisites)
+    - [Global Orchestration](#global-orchestration)
+    - [Local Development](#local-development)
 - [Engineering Team](#engineering-team)
 
 ---
@@ -27,13 +27,13 @@ Welcome to the central backend repository for **MediScanX**, a highly optimized,
 
 The MediScanX backend strictly follows an API Gateway pattern. All external frontend traffic hits the `gateway_backend` first. Acting as a secure perimeter, the Gateway validates incoming requests and enforces zero-trust authentication before proxying traffic into the isolated internal network of downstream inference and orchestration microservices.
 
-| Microservice | Role | Description |
-| :--- | :--- | :--- |
+| Microservice          | Role               | Description                                                                                                                                            |
+| :-------------------- | :----------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **`gateway_backend`** | Security & Routing | The central FastAPI reverse proxy. Handles CORS, rate-limiting, chunked upload limits, and zero-trust asymmetric authentication (Supabase ES256/JWKS). |
-| **`agent_service`** | Orchestration | LangGraph-powered stateful orchestration engine. Manages RAG (clinical guidelines retrieval) and streams Server-Sent Events (SSE) back to the client. |
-| **`cxr_service`** | Medical CV | PyTorch `DenseNet121` inference engine. Classifies Chest X-Rays and generates spatial GradCAM heatmap overlays. |
-| **`ecg_service`** | Signal Processing | PyTorch `CNN-BiLSTM` inference engine. Processes 12-lead ECG signals for anomaly classification and 1D saliency mapping. |
-| **`skin_service`** | Medical CV | PyTorch `MobileNetV3` inference engine. Specializes in dermatological lesion classification and spatial heatmaps. |
+| **`agent_service`**   | Orchestration      | LangGraph-powered stateful orchestration engine. Manages RAG (clinical guidelines retrieval) and streams Server-Sent Events (SSE) back to the client.  |
+| **`cxr_service`**     | Medical CV         | PyTorch`DenseNet121` inference engine. Classifies Chest X-Rays and generates spatial GradCAM heatmap overlays.                                         |
+| **`ecg_service`**     | Signal Processing  | PyTorch`CNN-BiLSTM` inference engine. Processes 12-lead ECG signals for anomaly classification and 1D saliency mapping.                                |
+| **`skin_service`**    | Medical CV         | PyTorch`MobileNetV3` inference engine. Specializes in dermatological lesion classification and spatial heatmaps.                                       |
 
 ---
 
@@ -64,6 +64,7 @@ To maintain predictability and robustness across a complex multi-container deplo
 ### Prerequisites
 
 Ensure the following tools are installed on your host machine:
+
 - **Docker** & **Docker Compose**
 - **`uv`** (Astral's lightning-fast Python package manager)
 - **Python 3.12+**
@@ -80,7 +81,7 @@ This command will spin up the `gateway_backend` alongside the downstream inferen
 
 ### Local Development
 
-For active development, profiling, or running test suites, you can run individual microservices natively on your host machine using `uv`. 
+For active development, profiling, or running test suites, you can run individual microservices natively on your host machine using `uv`.
 
 Navigate into the desired service directory and execute:
 
@@ -90,15 +91,6 @@ uv sync
 uv run fastapi dev src/app/main.py
 ```
 
-> [!TIP]  
-> **Deep-Dive Schemas & Configurations**  
-> Developers *must* read the localized `README.md` file within each microservice directory (e.g., `cxr_service/README.md`). These individual documents contain the granular Input/Output matrices, exact JSON payload schemas, and required `.env` variables specific to that service.
-
----
-
-## Engineering Team
-
-Architected and engineered by:
-- **Daud Noman**
-- **Muhammad Arham Shafaat**
-- **Wassam Khan**
+> [!TIP]
+> **Deep-Dive Schemas & Configurations**
+> Developers _must_ read the localized `README.md` file within each microservice directory (e.g., `cxr_service/README.md`). These individual documents contain the granular Input/Output matrices, exact JSON payload schemas, and required `.env` variables specific to that service.
