@@ -187,7 +187,7 @@ jobs:
               uses: docker/build-push-action@v6
               with:
                   context: ./backend/gateway_backend
-                  file: ./gateway_backend/Dockerfile
+                  file: ./backend/gateway_backend/Dockerfile
                   push: false
                   load: true
                   no-cache: true
