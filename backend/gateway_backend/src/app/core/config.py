@@ -68,7 +68,7 @@ class GatewayConfig(BaseSettings):
         return f"{self.database_url}{separator}statement_cache_size=0"
 
     # The value is a comma-separated string in the environment, e.g.:
-    #   ALLOWED_ORIGINS=https:/abcxyz.app,capacitor://localhost
+    # ALLOWED_ORIGINS=https:/abcxyz.app,capacitor://localhost
     allowed_origins: str
 
     # Upload size cap enforced at the gateway perimeter.
