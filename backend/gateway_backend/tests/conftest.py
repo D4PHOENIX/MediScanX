@@ -7,19 +7,29 @@ import os
 # GatewayConfig is a pydantic-settings BaseSettings with four required
 # string fields (no defaults).  Importing app.main triggers GatewayConfig()
 # in security.py at module load time.  Any missing mandatory field raises a
-# ValidationError at collection time, aborting the entire test run. 
+# ValidationError at collection time, aborting the entire test run.
+#
+# Bug #7 fix: added the three fields that were missing in the original:
+#   - SUPABASE_URL               (was absent → ValidationError)
+#   - SUPABASE_ANON_KEY          (was absent → ValidationError)
+#   - SUPABASE_SERVICE_ROLE_KEY  (was absent → ValidationError)
 # -----------------------------------------------------------------------
 os.environ.setdefault("SUPABASE_URL", "http://mock-supabase")
 os.environ.setdefault("SUPABASE_ANON_KEY", "mock-anon-key")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "mock-service-role-key")
+os.environ.setdefault("SUPABASE_JWT_SECRET", "dummy_jwt_secret_for_testing_only_at_least_32_chars")
 os.environ.setdefault("CXR_SERVICE_URL", "http://cxr-mock")
 os.environ.setdefault("ECG_SERVICE_URL", "http://ecg-mock")
 os.environ.setdefault("SKIN_SERVICE_URL", "http://skin-mock")
 os.environ.setdefault("AGENT_SERVICE_URL", "http://agent-mock")
+os.environ.setdefault("ALLOWED_ORIGINS", "https://test-origin.example.com")
+os.environ.setdefault("DEV_TOKEN_SECRET", "test-dev-token-secret")
+os.environ.setdefault("SUPABASE_STORAGE_BUCKET", "test-bucket")
+os.environ.setdefault("MAX_UPLOAD_BYTES", "20971520")
 # Allow the dev-token bypass in tests so individual tests can use it without
 # constructing a real HS256 JWT.
 os.environ.setdefault("DEV_MODE", "true")
-    
+
 from unittest.mock import patch
 
 import pytest

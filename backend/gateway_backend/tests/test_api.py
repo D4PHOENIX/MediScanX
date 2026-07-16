@@ -1,21 +1,6 @@
 """Tests for the Gateway API using strict mocking for ultra-fast execution."""
 
 import os
-
-os.environ.setdefault("SUPABASE_URL", "http://mock-supabase")
-os.environ.setdefault("SUPABASE_ANON_KEY", "mock-anon-key")
-os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "mock-service-role-key")
-os.environ.setdefault("SUPABASE_JWT_SECRET", "dummy_jwt_secret_for_testing_only_at_least_32_chars")
-os.environ.setdefault("CXR_SERVICE_URL", "http://cxr-mock")
-os.environ.setdefault("ECG_SERVICE_URL", "http://ecg-mock")
-os.environ.setdefault("SKIN_SERVICE_URL", "http://skin-mock")
-os.environ.setdefault("AGENT_SERVICE_URL", "http://agent-mock")
-os.environ.setdefault("ALLOWED_ORIGINS", "https://test-origin.example.com")
-os.environ.setdefault("DEV_MODE", "true")
-os.environ.setdefault("DEV_TOKEN_SECRET", "test-dev-token-secret")
-os.environ.setdefault("SUPABASE_STORAGE_BUCKET", "test-bucket")
-os.environ.setdefault("MAX_UPLOAD_BYTES", "20971520")
-
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
