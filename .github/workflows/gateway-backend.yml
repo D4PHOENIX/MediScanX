@@ -1,7 +1,7 @@
 # =============================================================================
 # MediScanX — gateway_backend CI/CD Pipeline
 # =============================================================================
-# Trigger : Pull Requests to `dev` or 'main' touching any file under gateway_**
+# Trigger : Pull Requests to `dev` or `main` branch touching any file under gateway_**
 # Runner  : ubuntu-latest
 # Toolchain: uv (astral-sh)
 # Jobs    : 1. test         — pytest suite with all mandatory env vars injected
@@ -29,7 +29,7 @@ on:
             - dev
             - main
         paths:
-            - "gateway_**"
+            - "backend/gateway_backend/**"
 
 # Cancel superseded runs for the same PR branch immediately.
 concurrency:

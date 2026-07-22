@@ -5,7 +5,6 @@ progression over time, and tabular patient metric retrieval for clinical
 context enrichment.
 """
 
-from __future__ import annotations
 
 import logging
 import math
@@ -149,8 +148,8 @@ async def _temporal_progression_impl(
 @tool(args_schema=CalculateTemporalProgressionSchema)
 async def calculate_temporal_progression(
     current_scan_id: str,
+    config: RunnableConfig,
     previous_scan_id: Optional[str] = None,
-    config: RunnableConfig = None,
 ) -> Dict[str, Any]:
     """Compute L2 (Euclidean) distance between diagnostic embedding vectors of two scans.
 
@@ -213,7 +212,7 @@ async def calculate_temporal_progression(
 @tool(args_schema=QueryPatientMetricsSchema)
 async def query_patient_metrics(
     patient_id: str,
-    config: RunnableConfig = None,
+    config: RunnableConfig,
 ) -> str:
     """Retrieve tabular metrics (e.g. age, heart rate, blood pressure) for a patient.
 

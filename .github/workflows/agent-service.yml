@@ -62,7 +62,8 @@ jobs:
             # Safe dummy values — real credentials are never needed for the mocked
             # test suite, but the application import chain reads them at module load.
             GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || 'ci-dummy-gemini-key' }}
-            DATABASE_URL: ${{ secrets.DATABASE_URL || 'postgresql://ci_user:ci_pass@localhost:5432/ci_db' }}
+            # DATABASE_URL uses a mock .pooler.supabase.com host to pass AgentConfig strict initialization validation
+            DATABASE_URL: ${{ secrets.DATABASE_URL || 'postgresql://ci_user:ci_pass@aws-0-eu-central-1.pooler.supabase.com:5432/ci_db' }}
             SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'http://mock-supabase' }}
             SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || 'mock-service-role-key' }}
             CXR_SERVICE_URL: "http://mock-cxr:8001/predict"
