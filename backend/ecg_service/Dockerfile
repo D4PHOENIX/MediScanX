@@ -12,9 +12,10 @@ ENV UV_COMPILE_BYTECODE=1 \
 # Copy lockfile and pyproject.toml to install dependencies
 COPY pyproject.toml uv.lock ./
 
-# Install dependencies into the virtual environment using uv
-ENV UV_NO_CACHE=1
-RUN uv sync --no-install-project --no-cache
+# Install dependencies using Docker BuildKit cache mount so packages are
+# cached on the daemon disk between builds and not re-downloaded on every run.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --no-install-project --no-dev
 
 
 # Stage 2 – production runtime
