@@ -21,7 +21,7 @@ from app.services.report_service import ReportGenerator
 
 router: APIRouter = APIRouter(prefix="/reports", tags=["reports"], dependencies=[Depends(get_current_user)])
 
-_report_paths: Dict[str, str] = {}
+
 
 
 
@@ -85,10 +85,7 @@ async def generate_report(payload: GenerateReportRequest, request: Request) -> D
         supabase_client=request.app.state.supabase_client,
     )
 
-    # Keep track of the storage path for the download endpoint.
-    # Note: Using an in-memory dictionary is unsafe for multi-worker deployments.
-    # Future enhancement should move this path resolution to Redis or Postgres.
-    _report_paths[payload.patient_id] = file_name
+    # The storage path is fully deterministic, eliminating the need for in-memory mapping.
 
     return {
         "message": "Report generated",
@@ -112,17 +109,19 @@ async def download_report(patient_id: str, request: Request) -> RedirectResponse
         HTTPException: Raises 404 if the report has not been generated, or 500
             if cloud storage integration fails.
     """
-    file_path: str | None = _report_paths.get(patient_id)
-    if not file_path:
-        raise HTTPException(status_code=404, detail="Report not found. Please generate first.")
+    # Using a deterministic path allows any worker to resolve the file location.
+    file_path = f"{patient_id}_report.pdf"
 
     sb_client = request.app.state.supabase_client
-    signed: Dict[str, Any] = await sb_client.storage.from_("medical_reports").create_signed_url(
-        file_path, 60 * 60 * 24
-    )
-    # The response dictionary contains a key named ``signedURL``.
-    signed_url: str | None = signed.get("signedURL") or signed.get("signedUrl")
-    if not signed_url:
-        raise HTTPException(status_code=500, detail="Could not generate signed URL")
+    try:
+        signed: Dict[str, Any] = await sb_client.storage.from_("medical_reports").create_signed_url(
+            file_path, 60 * 60 * 24
+        )
+        # The response dictionary contains a key named ``signedURL``.
+        signed_url: str | None = signed.get("signedURL") or signed.get("signedUrl")
+        if not signed_url:
+            raise ValueError("Empty signed URL")
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Report not found. Please generate first.") from exc
 
     return RedirectResponse(url=signed_url)

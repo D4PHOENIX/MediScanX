@@ -33,10 +33,7 @@ async def test_download_endpoint_existing_report_redirects():
     app.state.supabase_client = mock_supabase_client
     
     patient_id = "patient-valid-456"
-    file_path = "patient-valid-456_hash_report.pdf"
-    
-    # Inject report path into router state
-    report_router._report_paths[patient_id] = file_path
+    file_path = "patient-valid-456_report.pdf"
     
     response = client.get(
         f"/api/v1/reports/download/{patient_id}",
@@ -50,12 +47,19 @@ async def test_download_endpoint_existing_report_redirects():
     
     mock_bucket.create_signed_url.assert_awaited_once_with(file_path, 86400)
     
-    # Clean up
-    del report_router._report_paths[patient_id]
+    mock_bucket.create_signed_url.assert_awaited_once_with(file_path, 86400)
 
 
 @pytest.mark.asyncio
 async def test_download_endpoint_missing_report_returns_404():
+    mock_supabase_client = MagicMock()
+    mock_bucket = AsyncMock()
+    mock_supabase_client.storage.from_.return_value = mock_bucket
+    # Mock the API throwing an error (e.g. file not found)
+    mock_bucket.create_signed_url.side_effect = Exception("Storage error: file not found")
+    
+    app.state.supabase_client = mock_supabase_client
+
     response = client.get(
         "/api/v1/reports/download/patient-missing",
         headers={"Authorization": "Bearer test-dev-token-secret"}

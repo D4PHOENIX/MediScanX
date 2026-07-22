@@ -136,15 +136,17 @@ class ReportGenerator:
             raise RuntimeError("supabase_client must be provided")
         bucket = supabase_client.storage.from_("medical_reports")
 
-        # 1. Stage PDF without QR (so we can generate a hash and a signed URL)
+        # 1. Stage PDF without QR (so we can generate a signed URL)
         stage_pdf = self._build_pdf_story(patient_id, scan_metadata, llm_summary)
-        pdf_hash = hashlib.sha256(stage_pdf).hexdigest()[:16]
-        storage_path = f"{patient_id}_{pdf_hash}_report.pdf"
+        storage_path = f"{patient_id}_report.pdf"
 
         await bucket.upload(
             path=storage_path,
             file=stage_pdf,
-            file_options={"content-type": "application/pdf"},
+            file_options={
+                "content-type": "application/pdf",
+                "x-upsert": "true",
+            },
         )
 
         # 2. Obtain a signed URL pointing to the (still placeholder) object
@@ -162,12 +164,14 @@ class ReportGenerator:
         # 4. Build the final PDF that includes the QR image
         final_pdf = self._build_pdf_story(patient_id, scan_metadata, llm_summary, qr_img=qr_img)
 
-        # 5. Replace the placeholder object with the final PDF
-        await bucket.remove([storage_path])
+        # 5. Replace the placeholder object with the final PDF using x-upsert
         await bucket.upload(
             path=storage_path,
             file=final_pdf,
-            file_options={"content-type": "application/pdf"},
+            file_options={
+                "content-type": "application/pdf",
+                "x-upsert": "true",
+            },
         )
 
         return final_pdf, signed_url, storage_path
