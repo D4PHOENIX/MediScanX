@@ -19,12 +19,14 @@ async def setup_powersync_schema(pool: Pool) -> None:
     CREATE TABLE IF NOT EXISTS chat_messages (
         id UUID PRIMARY KEY,
         thread_id UUID NOT NULL,
+        patient_id UUID NOT NULL,
         is_user BOOLEAN NOT NULL,
         text TEXT NOT NULL,
         citations JSONB DEFAULT '[]'::jsonb,
         created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS idx_chat_messages_thread_id ON chat_messages(thread_id);
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_patient_id ON chat_messages(patient_id);
     """
     async with pool.acquire() as conn:
         await conn.execute(query)
@@ -55,6 +57,7 @@ async def _execute_with_retry(pool: Pool, query: str, records: list, max_retries
 async def sync_state_messages(
     pool: Pool,
     thread_id: str,
+    patient_id: str,
     messages: List[Any],
     citations: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
@@ -86,20 +89,20 @@ async def sync_state_messages(
         # 4. Append ONLY using the sanitized msg_id
         if isinstance(msg, HumanMessage):
             content = msg.content if isinstance(msg.content, str) else str(msg.content)
-            records.append((msg_id, thread_id, True, content, "[]"))
+            records.append((msg_id, thread_id, patient_id, True, content, "[]"))
 
         elif isinstance(msg, AIMessage) and not msg.tool_calls:
             content = msg.content if isinstance(msg.content, str) else str(msg.content)
             if content.strip():
                 citations_json = json.dumps(citations) if citations else "[]"
-                records.append((msg_id, thread_id, False, content, citations_json))
+                records.append((msg_id, thread_id, patient_id, False, content, citations_json))
 
     if not records:
         return
 
     query = """
-    INSERT INTO chat_messages (id, thread_id, is_user, text, citations, created_at)
-    VALUES ($1::uuid, $2::uuid, $3, $4, $5::jsonb, NOW())
+    INSERT INTO chat_messages (id, thread_id, patient_id, is_user, text, citations, created_at)
+    VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6::jsonb, NOW())
     ON CONFLICT (id) DO NOTHING
     """
 

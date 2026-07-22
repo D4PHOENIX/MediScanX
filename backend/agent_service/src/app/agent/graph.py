@@ -180,7 +180,7 @@ async def build_graph(
         Tuple[Any, AsyncPostgresSaver]: A tuple of ``(compiled_graph, checkpointer)`` where the compiled graph
         is ready to serve requests and the checkpointer owns the DB connection pool.
     """
-    # LLM setup
+    # --- LLM ---
     llm = ChatGoogleGenerativeAI(
         model=google_model,
         api_key=gemini_api_key,
@@ -189,14 +189,14 @@ async def build_graph(
     )
     model_with_tools = llm.bind_tools(TOOLS)
 
-    # Checkpointer 
+    # --- Checkpointer ---
     # AsyncPostgresSaver maps to the checkpoints / checkpoint_blobs /
     # checkpoint_writes tables defined in schema/0001_initial_schema.sql.
     import psycopg_pool
 
     await setup_powersync_schema(pool)
         
-    async with psycopg_pool.AsyncConnectionPool(conninfo=database_url, min_size=2, max_size=10) as pg_pool:
+    async with psycopg_pool.AsyncConnectionPool(conninfo=database_url, min_size=2, max_size=4) as pg_pool:
         checkpointer = AsyncPostgresSaver(pg_pool)
         await checkpointer.setup()
         logger.info("AsyncPostgresSaver initialised and schema verified.")
@@ -265,11 +265,12 @@ async def build_graph(
             messages = state["messages"]
             thread_id = config.get("configurable", {}).get("thread_id")
             db_pool = config.get("configurable", {}).get("db_pool")
+            patient_id = state.get("patient_id") or thread_id
 
             if thread_id and db_pool:
                 # Extract citation data from tool messages in the conversation
                 citations = _extract_citations_from_messages(messages)
-                await sync_state_messages(db_pool, thread_id, messages, citations)
+                await sync_state_messages(db_pool, thread_id, patient_id, messages, citations)
             return {}
         
         builder.add_node("sync_powersync", _sync_powersync_node)

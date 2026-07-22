@@ -18,6 +18,7 @@ from asyncpg import Pool
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 from langchain_core.runnables import RunnableConfig
+from app.models.schemas import OrchestrateFusionSchema
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +156,7 @@ async def _run_fusion_queries(
                 return {"message": "No valid scans found for the provided IDs."}
             return result
 
-        # IDs missing: query recent scans 
+        # ----- IDs missing: query recent scans -----
         rows = await conn.fetch(
             """
             SELECT id, modality, predicted_class, created_at
@@ -186,10 +187,6 @@ async def _run_fusion_queries(
         logger.exception("Fusion orchestration failed: %s", exc)
         return {"message": f"Error during fusion orchestration: {exc}"}
 
-
-class OrchestrateFusionSchema(BaseModel):
-    patient_id: str = Field(description="Unique patient identifier.")
-    selected_scan_ids: Optional[List[str]] = Field(default=None, description="Optional list of scan identifiers chosen by the user for fusion.")
 
 @tool(args_schema=OrchestrateFusionSchema)
 async def orchestrate_fusion(
