@@ -54,7 +54,7 @@ def pytest_configure(config) -> None:
 # ----------------------------------------------------------------
 os.environ.setdefault("GEMINI_API_KEY", "dummy-gemini-key-for-testing")
 os.environ.setdefault("GOOGLE_MODEL", "gemini-2.5-flash")
-os.environ.setdefault("DATABASE_URL", "postgresql://mock_user:mock_pass@localhost:5432/mock_db")
+os.environ.setdefault("DATABASE_URL", "postgresql://mock_user:mock_pass@aws-0-eu-central-1.pooler.supabase.com:5432/mock_db")
 os.environ.setdefault("CXR_SERVICE_URL", "http://mock-cxr:8001/predict")
 os.environ.setdefault("ECG_SERVICE_URL", "http://mock-ecg:8002/predict")
 os.environ.setdefault("SKIN_SERVICE_URL", "http://mock-skin:8003/predict")
