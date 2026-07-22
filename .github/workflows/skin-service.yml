@@ -1,7 +1,7 @@
 # =============================================================================
 # MediScanX — skin_service CI/CD Pipeline
 # =============================================================================
-# Trigger : Pull Requests to `dev` branch touching any file under skin_service/**
+# Trigger : Pull Requests to `dev` or `main` branch touching any file under skin_service/**
 # Runner  : ubuntu-latest
 # Toolchain: uv (astral-sh) with optimal PyTorch CPU wheel caching
 # Jobs    : 1. test        — mocked pytest suite (required gate to merge)
@@ -26,14 +26,10 @@
 name: skin-service CI
 
 on:
-    push:
-        branches:
-            - main
-        paths:
-            - "backend/skin_service/**"
     pull_request:
         branches:
             - dev
+            - main
         paths:
             - "backend/skin_service/**"
 

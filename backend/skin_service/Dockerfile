@@ -11,8 +11,11 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 # Use the locked requirements via uv
 COPY pyproject.toml uv.lock ./
-ENV UV_NO_CACHE=1
-RUN uv sync --no-install-project --no-dev --no-cache
+
+# Install dependencies using Docker BuildKit cache mount so packages are
+# cached on the daemon disk between builds and not re-downloaded on every run.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --no-install-project --no-dev
 
 # Stage 2 – production runtime
 FROM python:3.11-slim AS runtime
