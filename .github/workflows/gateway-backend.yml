@@ -1,7 +1,7 @@
 # =============================================================================
 # MediScanX — gateway_backend CI/CD Pipeline
 # =============================================================================
-# Trigger : Pull Requests to `dev` touching any file under gateway_**
+# Trigger : Pull Requests to `dev` or `main` branch touching any file under gateway_**
 # Runner  : ubuntu-latest
 # Toolchain: uv (astral-sh)
 # Jobs    : 1. test         — pytest suite with all mandatory env vars injected
@@ -24,14 +24,10 @@
 name: gateway-backend CI
 
 on:
-    push:
-        branches:
-            - main
-        paths:
-            - "backend/gateway_backend/**"
     pull_request:
         branches:
             - dev
+            - main
         paths:
             - "backend/gateway_backend/**"
 
@@ -187,7 +183,6 @@ jobs:
               uses: docker/build-push-action@v6
               with:
                   context: ./backend/gateway_backend
-                  file: ./backend/gateway_backend/Dockerfile
                   push: false
                   load: true
                   no-cache: true

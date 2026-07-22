@@ -12,14 +12,17 @@ Welcome to the central backend repository for **MediScanX**, a highly optimized,
 
 ## Table of Contents
 
-- [Architectural Topology &amp; Traffic Flow](#architectural-topology--traffic-flow)
-- [Core Technology Stack](#core-technology-stack)
-- [Unified Engineering Standards](#unified-engineering-standards)
-- [Getting Started](#getting-started)
-    - [Prerequisites](#prerequisites)
-    - [Global Orchestration](#global-orchestration)
-    - [Local Development](#local-development)
-- [Engineering Team](#engineering-team)
+- [MediScanX - Backend Microservices Architecture](#mediscanx---backend-microservices-architecture)
+    - [Table of Contents](#table-of-contents)
+    - [Architectural Topology \& Traffic Flow](#architectural-topology--traffic-flow)
+    - [Core Technology Stack](#core-technology-stack)
+    - [Unified Engineering Standards](#unified-engineering-standards)
+    - [Getting Started](#getting-started)
+        - [Prerequisites](#prerequisites)
+        - [Global Orchestration](#global-orchestration)
+        - [Local Development](#local-development)
+    - [Continuous Integration (CI/CD)](#continuous-integration-cicd)
+    - [Engineering Team](#engineering-team)
 
 ---
 
@@ -94,3 +97,15 @@ uv run fastapi dev src/app/main.py
 > [!TIP]
 > **Deep-Dive Schemas & Configurations**
 > Developers _must_ read the localized `README.md` file within each microservice directory (e.g., `cxr_service/README.md`). These individual documents contain the granular Input/Output matrices, exact JSON payload schemas, and required `.env` variables specific to that service.
+
+---
+
+## Continuous Integration (CI/CD)
+
+The MediScanX monorepo employs a stringent, automated GitHub Actions pipeline across all microservices to enforce code quality and prevent regressions.
+
+- **Branch Protection**: Direct pushes to `dev` and `main` are strictly blocked. All architectural and feature changes must pass through Pull Requests.
+- **Automated Validation**: On every Pull Request, individual service pipelines trigger automatically. They execute:
+    - Mocked `pytest` suites to validate domain logic without external IO overhead.
+    - Multi-stage Docker build dry-runs to ensure containerization integrity before merging.
+- **Dependency Caching**: Workflows utilize `astral-sh/setup-uv` with Docker BuildKit cache mounts to optimize pipeline execution times.

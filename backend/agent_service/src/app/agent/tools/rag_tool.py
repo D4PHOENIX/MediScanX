@@ -5,7 +5,6 @@ Supabase (pgvector) to ground the agent's responses in peer-reviewed
 clinical literature (PubMed, StatPearls, radiology textbooks).
 """
 
-from __future__ import annotations
 
 import asyncio
 import json as _json
@@ -68,8 +67,8 @@ def _get_cross_encoder():
 @tool(args_schema=SearchClinicalGuidelinesSchema)
 async def search_clinical_guidelines(
     query: str,
+    config: RunnableConfig,
     finding_label: Optional[str] = None,
-    config: RunnableConfig = None,
 ) -> str:
     """Search clinical guidelines using vector similarity over pgvector.
 
@@ -87,6 +86,7 @@ async def search_clinical_guidelines(
         ``title``, ``content`` (excerpt), and ``similarity``.  Returns a
         descriptive error message string if the search could not be completed.
     """
+    
     db_pool = config.get("configurable", {}).get("db_pool") if config else None
     if not _get_config().database_url:
         return "Error: Database URL is not configured — cannot search guidelines."

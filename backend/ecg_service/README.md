@@ -18,6 +18,30 @@ PYTHONPATH=src uv run uvicorn app.main:app --host 0.0.0.0 --port 8002
 
 The API will be available at `http://localhost:8002`. Interactive Swagger documentation can be accessed at `http://localhost:8002/docs`.
 
+## Docker Deployment
+
+The application is fully containerized using a multi-stage Docker build optimized for Python with `uv`.
+
+To build the image locally:
+
+```bash
+docker build -t mediscanx/ecg-service .
+```
+
+To run the container:
+
+```bash
+docker run -p 8002:8002 mediscanx/ecg-service
+```
+
+## CI Pipeline
+
+This service includes a comprehensive CI pipeline using GitHub Actions, triggered on pull requests to the `dev` and `main` branches. It incorporates:
+
+- **Mocked Pytest Suite:** Runs the unit and integration tests, bypassing disk I/O for heavy models.
+- **Dual-layer PyTorch Caching:** Fast restoration of Torch and Torchvision CPU wheels via `astral-sh/setup-uv`.
+- **Multi-stage Docker Dry-Run:** Exercises the `Dockerfile` to catch build errors and missing dependencies without pushing to a registry.
+
 ## Payload Schemas Matrix
 
 The service exposes a multipart endpoint `/predict` for ECG signal analysis.
