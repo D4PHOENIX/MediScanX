@@ -16,6 +16,8 @@ from asyncpg import Pool
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 from langchain_core.runnables import RunnableConfig
+from app.models.schemas import CalculateTemporalProgressionSchema, QueryPatientMetricsSchema
+from app.utils.vector_utils import _vec_to_list
 
 logger = logging.getLogger(__name__)
 
@@ -28,29 +30,6 @@ def _get_config() -> 'AgentConfig':
 
 _EMBED_DIM = 256
 _SIGNIFICANT_THRESHOLD = 0.5
-
-
-def _vec_to_list(vec: Any) -> Optional[List[float]]:
-    """Convert a PostgreSQL vector/array to a plain Python list of floats.
-
-    Handles native Python lists, pgvector string representations, and
-    ``None`` values gracefully.
-
-    Args:
-        vec (Any): Raw vector value from asyncpg (list, str, or None).
-
-    Returns:
-        Optional[List[float]]: A list of floats, or ``None`` if conversion is not possible.
-    """
-    if vec is None:
-        return None
-    if isinstance(vec, list):
-        return [float(v) for v in vec]
-    # In case it's a string representation (pgvector 0.x)
-    try:
-        return [float(x) for x in vec.strip("[]").split(",")]
-    except Exception:
-        return None
 
 
 async def _temporal_progression_impl(
@@ -71,7 +50,7 @@ async def _temporal_progression_impl(
         Dict[str, Any]: Dictionary containing ``l2_distance``, ``interpretation``,
         and ``is_significant`` flag.
     """
-    # Fetch current scan 
+    # --- Fetch current scan -------------------------------------------------
     current = await conn.fetchrow(
         """
         SELECT embedding, modality, primary_condition, patient_id
@@ -101,7 +80,7 @@ async def _temporal_progression_impl(
     condition = current["primary_condition"]
     patient_id = current["patient_id"]
 
-    # Retrieve previous vector 
+    # --- Retrieve previous vector -------------------------------------------
     if previous_scan_id is not None:
         prev_row = await conn.fetchrow(
             "SELECT embedding FROM patient_scans WHERE id = $1", previous_scan_id
@@ -151,7 +130,7 @@ async def _temporal_progression_impl(
             "is_significant": None,
         }
 
-    # Compute L2 distance 
+    # --- Compute L2 distance ------------------------------------------------
     distance = math.dist(current_vector, prev_vector)
     significant = distance > _SIGNIFICANT_THRESHOLD
     interpretation = (
@@ -166,10 +145,6 @@ async def _temporal_progression_impl(
         "is_significant": significant,
     }
 
-
-class CalculateTemporalProgressionSchema(BaseModel):
-    current_scan_id: str = Field(description="Identifier of the scan to be assessed.")
-    previous_scan_id: Optional[str] = Field(default=None, description="Identifier of a specific previous scan (optional).")
 
 @tool(args_schema=CalculateTemporalProgressionSchema)
 async def calculate_temporal_progression(
@@ -234,9 +209,6 @@ async def calculate_temporal_progression(
             if conn is not None:
                 await conn.close()
 
-
-class QueryPatientMetricsSchema(BaseModel):
-    patient_id: str = Field(description="The unique identifier of the patient to query.")
 
 @tool(args_schema=QueryPatientMetricsSchema)
 async def query_patient_metrics(

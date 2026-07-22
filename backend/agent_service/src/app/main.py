@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from app.core.config import AgentConfig
 from app.core.exceptions import ExceptionRegistry
 from app.api.routes import router as chat_router
-from app.models.schemas import HealthResponse, ReadyResponse, RootResponse
+from app.api import health
 
 logger = logging.getLogger(__name__)
 
@@ -88,36 +88,4 @@ ExceptionRegistry.register_handlers(app)
 
 # Include the SSE streaming router
 app.include_router(chat_router)
-
-
-@app.get("/", status_code=200, response_model=RootResponse)
-async def root() -> RootResponse:
-    """Root endpoint returning service metadata.
-
-    Returns:
-        Dict[str, str]: A dictionary containing the service name and its current version.
-    """
-    return {"service": "agent_service", "version": app.version}
-
-
-@app.get("/healthz", status_code=200, response_model=HealthResponse)
-async def healthz() -> HealthResponse:
-    """Liveness probe verifying that the worker process is running.
-
-    Returns:
-        Dict[str, str]: A dictionary indicating system health status and version.
-    """
-    return {
-        "status": "ok",
-        "version": app.version,
-    }
-
-
-@app.get("/ready", response_model=ReadyResponse)
-async def ready() -> ReadyResponse:
-    """Readiness probe (can be extended to check downstream deps).
-
-    Returns:
-        Dict[str, str]: A dictionary indicating whether the service is ready.
-    """
-    return {"status": "ready"}
+app.include_router(health.router, tags=["Health"])

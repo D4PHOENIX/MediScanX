@@ -98,3 +98,25 @@ class RootResponse(BaseModel):
 
     service: str
     version: str
+
+
+# ---------------------------------------------------------------------------
+#  Tool schemas
+# ---------------------------------------------------------------------------
+class SearchClinicalGuidelinesSchema(BaseModel):
+    query: str = Field(description="A natural-language query describing the clinical context.")
+    finding_label: Optional[str] = Field(None, description="The detected finding label to fetch from the finding glossary")
+
+
+class CalculateTemporalProgressionSchema(BaseModel):
+    current_scan_id: str = Field(description="Identifier of the scan to be assessed.")
+    previous_scan_id: Optional[str] = Field(default=None, description="Identifier of a specific previous scan (optional).")
+
+
+class QueryPatientMetricsSchema(BaseModel):
+    patient_id: str = Field(description="The unique identifier of the patient to query.")
+
+
+class OrchestrateFusionSchema(BaseModel):
+    patient_id: str = Field(description="Unique patient identifier.")
+    selected_scan_ids: Optional[List[str]] = Field(default=None, description="Optional list of scan identifiers chosen by the user for fusion.")
