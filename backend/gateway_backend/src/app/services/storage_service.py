@@ -1,15 +1,19 @@
 """Supabase Storage upload service for scan image persistence.
 
 Provides an asynchronous interface to upload binary image files to a configured
-Supabase Storage bucket using the service-role key, bypassing RLS so that the
-gateway can write on behalf of any authenticated user.
+Supabase Storage bucket using the ``supabase-py`` async SDK.  The SDK client is
+initialised with the ``service_role_key`` so that Row-Level Security is bypassed,
+allowing the gateway to write on behalf of any authenticated user.
+
+This module supports both the new ``sb_secret_*`` API keys and the legacy
+JWT-format keys — the SDK handles auth translation internally.
 """
 
 import logging
 import mimetypes
 from typing import Optional
 
-from httpx import AsyncClient, HTTPStatusError, RequestError
+from supabase._async.client import AsyncClient as SupabaseAsyncClient
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -27,9 +31,9 @@ _ALLOWED_CONTENT_TYPES: frozenset[str] = frozenset({
 class StorageService:
     """Async interface for uploading scan images to Supabase Storage.
 
-    All methods are static — there is no per-instance state.  The
-    ``httpx.AsyncClient`` stored on ``app.state`` is passed in explicitly
-    so that the gateway's single shared client handles all outbound I/O.
+    All methods are static — there is no per-instance state.  The shared
+    ``supabase.AsyncClient`` stored on ``app.state`` is passed in explicitly
+    so that the gateway uses a single SDK client for all storage I/O.
     """
 
     @staticmethod
@@ -57,9 +61,7 @@ class StorageService:
 
     @staticmethod
     async def upload_scan_image(
-        http_client: AsyncClient,
-        supabase_url: str,
-        service_role_key: str,
+        supabase_client: SupabaseAsyncClient,
         bucket: str,
         user_id: str,
         scan_id: str,
@@ -68,15 +70,12 @@ class StorageService:
     ) -> str:
         """Uploads a scan image to Supabase Storage and returns its public URL.
 
-        Issues a ``PUT`` to the Supabase Storage REST API using the
-        ``service_role_key`` so that RLS is bypassed at the storage layer.
-        The object is created with public read access, matching the expected
-        access pattern for the Flutter UI (direct HTTPS fetch by URL).
+        Uses the ``supabase-py`` async SDK which internally handles auth
+        token translation, supporting both legacy JWT keys and the newer
+        ``sb_secret_*`` API keys.
 
         Args:
-            http_client: The shared ``httpx.AsyncClient`` from ``app.state``.
-            supabase_url: Base URL of the Supabase project (e.g. ``https://xyz.supabase.co``).
-            service_role_key: The Supabase service-role secret key.
+            supabase_client: The shared ``supabase.AsyncClient`` from ``app.state``.
             bucket: Target storage bucket name (e.g. ``"scan-images"``).
             user_id: The authenticated user's UUID — used to namespace the object path.
             scan_id: The scan's UUID — used as the filename stem.
@@ -87,7 +86,7 @@ class StorageService:
             str: The public HTTPS URL of the stored object.
 
         Raises:
-            RuntimeError: If the Supabase Storage upload fails with a non-2xx response.
+            RuntimeError: If the Supabase Storage upload fails.
         """
         resolved_content_type = content_type or "image/png"
         if resolved_content_type not in _ALLOWED_CONTENT_TYPES:
@@ -99,32 +98,31 @@ class StorageService:
             resolved_content_type = "image/png"
 
         object_path = StorageService._build_object_path(user_id, scan_id, resolved_content_type)
-        upload_url = f"{supabase_url}/storage/v1/object/{bucket}/{object_path}"
 
         try:
-            resp = await http_client.put(
-                upload_url,
-                content=file_bytes,
-                headers={
-                    "Authorization": f"Bearer {service_role_key}",
-                    "Content-Type": resolved_content_type,
+            storage_bucket = supabase_client.storage.from_(bucket)
+            await storage_bucket.upload(
+                path=object_path,
+                file=file_bytes,
+                file_options={
+                    "content-type": resolved_content_type,
                     # Instruct Supabase Storage to overwrite any existing object at
                     # this path, enabling idempotent re-uploads on retry.
                     "x-upsert": "true",
                 },
             )
-            resp.raise_for_status()
-        except (HTTPStatusError, RequestError) as exc:
+        except Exception as exc:
             logger.error(
-                "Supabase Storage upload failed for scan_id=%s: %s", scan_id, exc
+                "Supabase Storage upload failed for scan_id=%s: %s",
+                scan_id,
+                exc,
             )
             raise RuntimeError(
                 f"Storage upload failed for scan {scan_id}: {exc}"
             ) from exc
 
-        # Construct the authenticated URL for the stored object.
-        # Since the bucket is private, this URL requires the Flutter client
-        # to attach `Authorization: Bearer <JWT>` to the image download request.
-        auth_url = f"{supabase_url}/storage/v1/object/authenticated/{bucket}/{object_path}"
-        logger.info("Scan image stored at %s", auth_url)
-        return auth_url
+        # Construct the public URL for the stored object.
+        # Since the bucket is public, the Flutter client can fetch directly via HTTPS.
+        public_url: str = await storage_bucket.get_public_url(object_path)
+        logger.info("Scan image stored at %s", public_url)
+        return public_url

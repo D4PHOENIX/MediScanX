@@ -50,25 +50,39 @@ class GatewayConfig(BaseSettings):
         """
         return f"{self.supabase_url}/auth/v1/.well-known/jwks.json"
 
+    @field_validator("database_url")
+    @classmethod
+    def validate_database_url_pooler(cls, v: str | None) -> str | None:
+        """Ensures the database URL uses the Supabase SESSION pooler (port 5432)."""
+        if v:
+            from urllib.parse import urlparse
+            parsed = urlparse(v)
+            if not parsed.hostname or not parsed.hostname.endswith(".pooler.supabase.com"):
+                raise ValueError(
+                    "DATABASE_URL host must use the .pooler.supabase.com endpoint. "
+                    "A bare db.<ref>.supabase.co host resolves to IPv6-only and will fail on IPv4-only networks."
+                )
+            if parsed.port != 5432:
+                raise ValueError(
+                    "DATABASE_URL must use the Supabase SESSION pooler (port 5432). "
+                    "Session mode supports prepared statements for long-running containers."
+                )
+        return v
+
     @property
     def asyncpg_dsn(self) -> str | None:
-        """Returns the database URL with pgBouncer-safe query parameters.
+        """Returns the database URL.
 
-        Supabase uses pgBouncer in transaction mode, which is incompatible
-        with asyncpg's default prepared-statement caching.  Appending
-        ``statement_cache_size=0`` disables the cache and prevents
-        ``prepared statement does not exist`` runtime errors.
+        Since we use the Supabase SESSION pooler (port 5432), prepared statements
+        are fully supported and we no longer need to append statement_cache_size=0.
 
         Returns:
-            str | None: The DSN string if DATABASE_URL is configured, else None.
+            str | None: The database URL if configured, else None.
         """
-        if not self.database_url:
-            return None
-        separator = "&" if "?" in self.database_url else "?"
-        return f"{self.database_url}{separator}statement_cache_size=0"
+        return self.database_url
 
     # The value is a comma-separated string in the environment, e.g.:
-    # ALLOWED_ORIGINS=https:/abcxyz.app,capacitor://localhost
+    #   ALLOWED_ORIGINS=https:/abcxyz.app,capacitor://localhost
     allowed_origins: str
 
     # Upload size cap enforced at the gateway perimeter.

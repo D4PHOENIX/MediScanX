@@ -17,7 +17,6 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import inch
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as RLImage
-from supabase import create_client, Client
 
 
 class ReportGenerator:
@@ -28,33 +27,6 @@ class ReportGenerator:
     It additionally manages secure cloud storage and the generation of embedded
     QR codes for seamless report access.
     """
-
-    # The Supabase client is created on first use so side‑effects are avoided during
-    # import time (the storage service may not be needed in every deployment).
-    _supabase: Optional[Client] = None
-
-    @classmethod
-    def _get_supabase_client(cls) -> Client:
-        """Retrieves or initializes the singleton Supabase client instance.
-
-        Initializes the client using gateway configuration parameters if it has
-        not been previously instantiated, ensuring lazy loading of cloud resources.
-
-        Returns:
-            Client: An authenticated Supabase client instance.
-
-        Raises:
-            RuntimeError: If mandatory configuration variables (supabase_url,
-                supabase_service_role_key) are not defined in the environment.
-        """
-        if cls._supabase is None:
-            from app.core.config import gateway_config
-            url: str = gateway_config.supabase_url
-            key: str = gateway_config.supabase_service_role_key
-            if not url or not key:
-                raise RuntimeError("supabase_url and supabase_service_role_key must be set in config")
-            cls._supabase = create_client(url, key)
-        return cls._supabase
 
     def _build_pdf_story(
         self,
@@ -99,7 +71,7 @@ class ReportGenerator:
         story.append(Paragraph(f"Patient ID: {patient_id}", body_style))
         story.append(Spacer(1, 0.1 * inch))
 
-        # --- Scan metadata section ------------------------------------------------
+        # Scan metadata section
         story.append(Paragraph("Selected Scans:", body_style))
         story.append(Spacer(1, 0.1 * inch))
         for m in scan_metadata:
@@ -131,11 +103,12 @@ class ReportGenerator:
         doc.build(story)
         return buffer.getvalue()
 
-    def generate_qr_report(
+    async def generate_qr_report(
         self,
         patient_id: str,
         scan_metadata: List[Dict[str, Any]],
         llm_summary: str,
+        supabase_client: Any = None,
     ) -> Tuple[bytes, str, str]:
         """Generates a complete clinical PDF report with cloud storage integration.
 
@@ -148,6 +121,7 @@ class ReportGenerator:
             scan_metadata (List[Dict[str, Any]]): A collection of dictionaries detailing
                 the specific diagnostic scans to be included in the report.
             llm_summary (str): The clinical interpretation summary synthesized by the LLM.
+            supabase_client: The shared Supabase client (async or sync) from ``app.state``.
 
         Returns:
             Tuple[bytes, str, str]: A tuple containing:
@@ -158,22 +132,25 @@ class ReportGenerator:
         Raises:
             RuntimeError: If the cloud storage provider fails to generate a signed access URL.
         """
-        supabase: Client = self._get_supabase_client()
-        bucket = supabase.storage.from_("medical_reports")
+        if supabase_client is None:
+            raise RuntimeError("supabase_client must be provided")
+        bucket = supabase_client.storage.from_("medical_reports")
 
-        # 1. Stage PDF without QR (so we can generate a hash and a signed URL)
+        # 1. Stage PDF without QR (so we can generate a signed URL)
         stage_pdf = self._build_pdf_story(patient_id, scan_metadata, llm_summary)
-        pdf_hash = hashlib.sha256(stage_pdf).hexdigest()[:16]
-        storage_path = f"{patient_id}_{pdf_hash}_report.pdf"
+        storage_path = f"{patient_id}_report.pdf"
 
-        bucket.upload(
+        await bucket.upload(
             path=storage_path,
             file=stage_pdf,
-            file_options={"content-type": "application/pdf"},
+            file_options={
+                "content-type": "application/pdf",
+                "x-upsert": "true",
+            },
         )
 
         # 2. Obtain a signed URL pointing to the (still placeholder) object
-        signed_resp = bucket.create_signed_url(storage_path, 60 * 60 * 24)  # 24 hours
+        signed_resp = await bucket.create_signed_url(storage_path, 60 * 60 * 24)  # 24 hours
         signed_url = signed_resp.get("signedURL") or signed_resp.get("signedUrl")
         if not signed_url:
             raise RuntimeError("Could not create signed URL from Supabase")
@@ -187,12 +164,14 @@ class ReportGenerator:
         # 4. Build the final PDF that includes the QR image
         final_pdf = self._build_pdf_story(patient_id, scan_metadata, llm_summary, qr_img=qr_img)
 
-        # 5. Replace the placeholder object with the final PDF
-        bucket.remove([storage_path])
-        bucket.upload(
+        # 5. Replace the placeholder object with the final PDF using x-upsert
+        await bucket.upload(
             path=storage_path,
             file=final_pdf,
-            file_options={"content-type": "application/pdf"},
+            file_options={
+                "content-type": "application/pdf",
+                "x-upsert": "true",
+            },
         )
 
         return final_pdf, signed_url, storage_path

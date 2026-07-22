@@ -12,6 +12,7 @@ from typing import AsyncIterator
 import asyncpg
 import httpx
 from fastapi import FastAPI
+from supabase import create_async_client
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.agent_router import router as agent_router
@@ -49,6 +50,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Shared async HTTP client for downstream ML-service proxying.
     app.state.http_client = httpx.AsyncClient()
 
+    # Shared Supabase async SDK client — used by StorageService and any router
+    # that needs direct Supabase API access.  Supports both legacy JWT and new
+    # sb_secret_* API keys.
+    app.state.supabase_client = await create_async_client(
+        gateway_config.supabase_url,
+        gateway_config.supabase_service_role_key,
+    )
+    logger.info("Supabase async client initialized.")
+
     # asyncpg connection pool — direct Postgres writes to scan_results.
     # Pool size is strictly bounded to prevent exhausting Supabase's per-project
     # connection limit (Free Tier ≈ 20 conns; Pro ≈ 100 conns).
@@ -58,9 +68,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.db_pool = await asyncpg.create_pool(
             dsn,
             min_size=2,
-            max_size=10,
+            max_size=4,
+            statement_cache_size=0,
         )
-        logger.info("asyncpg pool initialized (min_size=2, max_size=10).")
+        logger.info("asyncpg pool initialized (min_size=2, max_size=4).")
     else:
         app.state.db_pool = None
         logger.warning(

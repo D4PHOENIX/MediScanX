@@ -41,6 +41,12 @@ async def chat_with_agent(
         StreamingResponse: An asynchronous iterator yielding raw SSE byte chunks.
     """
     body: Dict[str, Any] = request_data.model_dump()
+    
+    # Scrub empty strings to None to satisfy downstream strict UUID parsing
+    if body.get("patient_id") == "":
+        body["patient_id"] = None
+    if body.get("current_scan_id") == "":
+        body["current_scan_id"] = None
 
     async def event_stream() -> AsyncGenerator[bytes, None]:
         async with httpx.AsyncClient() as client:
