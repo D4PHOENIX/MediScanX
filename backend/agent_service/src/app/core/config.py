@@ -44,6 +44,22 @@ class AgentConfig:
     # Supabase / database
     database_url: Optional[str] = field(default_factory=lambda: os.getenv("DATABASE_URL", None))
 
+    def __post_init__(self):
+        """Validates configuration after initialization."""
+        if self.database_url:
+            from urllib.parse import urlparse
+            parsed = urlparse(self.database_url)
+            if not parsed.hostname or not parsed.hostname.endswith(".pooler.supabase.com"):
+                raise ValueError(
+                    "DATABASE_URL host must use the .pooler.supabase.com endpoint. "
+                    "A bare db.<ref>.supabase.co host resolves to IPv6-only and will fail on IPv4-only networks."
+                )
+            if parsed.port != 5432:
+                raise ValueError(
+                    "DATABASE_URL must use the Supabase SESSION pooler (port 5432). "
+                    "Session mode supports prepared statements for long-running containers."
+                )
+
     # Downstream AI microservice endpoints
     cxr_service_url: str = field(default_factory=lambda: os.getenv(
         "CXR_SERVICE_URL", "http://cxr_service:8001/predict"
@@ -58,3 +74,6 @@ class AgentConfig:
     # Service settings
     host: str = field(default_factory=lambda: os.getenv("HOST", "0.0.0.0"))
     port: int = field(default_factory=lambda: int(os.getenv("PORT", "8005")))
+
+    # RAG settings
+    rerank_enabled: bool = field(default_factory=lambda: os.getenv("RERANK_ENABLED", "False").lower() in ("true", "1", "t"))
