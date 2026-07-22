@@ -1,7 +1,7 @@
 # =============================================================================
 # MediScanX — gateway_backend CI/CD Pipeline
 # =============================================================================
-# Trigger : Pull Requests to `dev` touching any file under gateway_**
+# Trigger : Pull Requests to `dev` or 'main' touching any file under gateway_**
 # Runner  : ubuntu-latest
 # Toolchain: uv (astral-sh)
 # Jobs    : 1. test         — pytest suite with all mandatory env vars injected
@@ -24,16 +24,12 @@
 name: gateway-backend CI
 
 on:
-    push:
-        branches:
-            - main
-        paths:
-            - "backend/gateway_backend/**"
     pull_request:
         branches:
             - dev
+            - main
         paths:
-            - "backend/gateway_backend/**"
+            - "gateway_**"
 
 # Cancel superseded runs for the same PR branch immediately.
 concurrency:
@@ -54,7 +50,7 @@ jobs:
         runs-on: ubuntu-latest
         defaults:
             run:
-                working-directory: backend/gateway_backend
+                working-directory: gateway_backend
 
         env:
             # -----------------------------------------------------------------------
@@ -159,7 +155,7 @@ jobs:
               uses: actions/upload-artifact@v4
               with:
                   name: gateway-pytest-results-${{ github.run_number }}
-                  path: backend/gateway_backend/pytest-results.xml
+                  path: gateway_backend/pytest-results.xml
                   retention-days: 7
 
     # =============================================================================
@@ -186,8 +182,7 @@ jobs:
             - name: Build gateway_backend Docker image
               uses: docker/build-push-action@v6
               with:
-                  context: ./backend/gateway_backend
-                  file: ./backend/gateway_backend/Dockerfile
+                  context: ./gateway_backend
                   push: false
                   load: true
                   no-cache: true
