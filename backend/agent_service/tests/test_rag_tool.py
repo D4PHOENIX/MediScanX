@@ -27,7 +27,7 @@ async def test_rag_query_encoder_and_retrieval(monkeypatch):
             "title": "Test Guideline",
             "content": "This is a test guideline for thoracic context.",
             "similarity": 0.85,
-            "source": "statpearls",
+            "source": "clinical_guidelines",
             "external_id": "ext-1"
         }
     ]
@@ -73,7 +73,7 @@ async def test_rag_query_encoder_and_retrieval(monkeypatch):
     # 2. Assert return JSON includes source and external_id
     res = json.loads(result_json)
     assert len(res) == 1
-    assert res[0]["source"] == "statpearls"
+    assert res[0]["source"] == "clinical_guidelines"
     assert res[0]["external_id"] == "ext-1"
 
 
