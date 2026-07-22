@@ -35,10 +35,20 @@ PYTHONPATH=src uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8005
 
 ### Docker Usage
 
+The service is containerized using a multi-stage Docker build optimized with `uv` for fast, cached dependency installations.
+
 ```bash
 docker build -t mediscanx-agent-service .
 docker run -p 8005:8005 --env-file .env mediscanx-agent-service
 ```
+
+### CI/CD Pipeline
+
+A GitHub Actions pipeline (`.github/workflows/agent-service.yml`) automatically runs on pull requests to the `dev` and `main` branches.
+It includes two jobs:
+
+1. **Test**: Runs the `pytest` suite using `uv`.
+2. **Docker Build**: Validates the multi-stage Docker build (dry-run, no push) and performs a smoke test on the entrypoint.
 
 ## Input / Output Matrix (Payload Schemas)
 

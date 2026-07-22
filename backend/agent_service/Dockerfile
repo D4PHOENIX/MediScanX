@@ -8,17 +8,16 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /app
 
 # Cache dependencies
-ENV UV_NO_CACHE=1
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv sync --frozen --no-install-project --no-dev --no-cache
+    uv sync --frozen --no-install-project --no-dev
 
 # Copy project files and install the project itself
 COPY pyproject.toml uv.lock ./
 COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-cache
+    uv sync --frozen --no-dev
 
 # Stage 2: Runtime
 FROM python:3.10-slim AS runtime

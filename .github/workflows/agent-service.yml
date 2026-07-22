@@ -1,25 +1,36 @@
 # =============================================================================
 # MediScanX — agent_service CI/CD Pipeline
 # =============================================================================
-# Trigger : Pull Requests targeting the `dev` branch that touch any file
+# Trigger : Pull Requests targeting the `dev` or `main` branch that touch any file
 #            under agent_service/**.
 # Runner  : ubuntu-latest
 # Toolchain: uv (astral-sh) for fast, lock-file-reproducible installs
 # Jobs    : 1. test        — run mocked pytest suite (required gate to merge)
 #           2. docker-build — dry-run multi-stage Dockerfile (no push)
+#
+# Heavy Initialization Mocking Strategy
+# --------------------------------------
+# The LangGraph `AsyncPostgresSaver` and `HuggingFaceEmbeddings` (MedCPT) are
+# highly IO-bound and require a live database / large model downloads.
+# In CI, we run a completely mocked `pytest` suite. The test runner uses
+# `conftest.py` to deeply patch `app.agent.graph.build_graph` and its dependencies.
+# This ensures that no database pools are opened, no 768-dim embedding models are
+# downloaded, and no Google Gemini API calls are made.
+#
+# Environment Variable Injection
+# --------------------------------------
+# We supply dummy values for all mandatory Gateway / DB credentials directly
+# in the `env:` block. This fulfills pydantic-settings validation requirements
+# without exposing any real secrets to the GitHub Actions runner.
 # =============================================================================
 
 name: agent-service CI
 
 on:
-    push:
-        branches:
-            - main
-        paths:
-            - "backend/agent_service/**"
     pull_request:
         branches:
             - dev
+            - main
         paths:
             - "backend/agent_service/**"
 
