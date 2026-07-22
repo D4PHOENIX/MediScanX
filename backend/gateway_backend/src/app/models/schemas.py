@@ -149,3 +149,29 @@ class ScanAlreadySyncedResponse(BaseModel):
 
     status: str = Field("already_synced", description='Always "already_synced" on conflict.')
     scan_id: str = Field(..., description="UUID that already existed in scan_results.")
+
+
+class ReferralRequest(BaseModel):
+    """Data contract representing a request to generate a referral QR payload.
+
+    Attributes:
+        patient_id: The universal identifier of the patient being referred.
+        diagnostic_summary: A clinical summary justifying the referral.
+    """
+
+    patient_id: str = Field(..., description="Unique patient identifier")
+    diagnostic_summary: str = Field(..., description="Clinical summary for referral")
+
+
+class GenerateReportRequest(BaseModel):
+    """Data contract for initiating the generation of a clinical PDF report.
+
+    Attributes:
+        patient_id: The universal identifier of the patient.
+        selected_scan_ids: A list of scan identifiers to include in the report.
+        llm_summary: The synthesized clinical interpretation provided by the orchestration agent.
+    """
+
+    patient_id: str = Field(..., description="Unique patient identifier")
+    selected_scan_ids: List[str] = Field(..., description="List of scan IDs to include")
+    llm_summary: str = Field(..., description="LLM-generated clinical summary")

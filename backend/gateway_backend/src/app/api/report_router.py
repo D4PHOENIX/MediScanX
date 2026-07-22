@@ -10,13 +10,13 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 import asyncpg
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
-from supabase import create_client, Client
 
 from app.core.config import gateway_config
 from app.core.security import get_current_user
+from app.models.schemas import GenerateReportRequest
 from app.services.report_service import ReportGenerator
 
 router: APIRouter = APIRouter(prefix="/reports", tags=["reports"], dependencies=[Depends(get_current_user)])
@@ -24,22 +24,10 @@ router: APIRouter = APIRouter(prefix="/reports", tags=["reports"], dependencies=
 _report_paths: Dict[str, str] = {}
 
 
-class GenerateReportRequest(BaseModel):
-    """Data contract for initiating the generation of a clinical PDF report.
-
-    Attributes:
-        patient_id: The universal identifier of the patient.
-        selected_scan_ids: A list of scan identifiers to include in the report.
-        llm_summary: The synthesized clinical interpretation provided by the orchestration agent.
-    """
-
-    patient_id: str = Field(..., description="Unique patient identifier")
-    selected_scan_ids: List[str] = Field(..., description="List of scan IDs to include")
-    llm_summary: str = Field(..., description="LLM-generated clinical summary")
 
 
 @router.post("/generate")
-async def generate_report(payload: GenerateReportRequest) -> Dict[str, str]:
+async def generate_report(payload: GenerateReportRequest, request: Request) -> Dict[str, str]:
     """Creates a comprehensive clinical PDF report and stages it in cloud storage.
 
     Aggregates diagnostic metadata directly from the primary database, generates
@@ -56,7 +44,7 @@ async def generate_report(payload: GenerateReportRequest) -> Dict[str, str]:
         HTTPException: Raises 500 if the database connection fails or configuration is missing.
     """
 
-    #  Fetch scan metadata from the database 
+    # Fetch scan metadata from the database
     dsn: str | None = gateway_config.database_url
     if not dsn:
         raise HTTPException(status_code=500, detail="DATABASE_URL not set")
@@ -85,19 +73,21 @@ async def generate_report(payload: GenerateReportRequest) -> Dict[str, str]:
             }
         )
 
-    #  Generate PDF and upload to Supabase 
+    # Generate PDF and upload to Supabase
     gen: ReportGenerator = ReportGenerator()
     pdf_bytes: bytes
     signed_url: str
     file_name: str
-    pdf_bytes, signed_url, file_name = gen.generate_qr_report(
+    pdf_bytes, signed_url, file_name = await gen.generate_qr_report(
         patient_id=payload.patient_id,
         scan_metadata=scan_metadata,
         llm_summary=payload.llm_summary,
+        supabase_client=request.app.state.supabase_client,
     )
 
     # Keep track of the storage path for the download endpoint.
-    # See Bug #8 note above regarding multi-worker limitations.
+    # Note: Using an in-memory dictionary is unsafe for multi-worker deployments.
+    # Future enhancement should move this path resolution to Redis or Postgres.
     _report_paths[payload.patient_id] = file_name
 
     return {
@@ -108,11 +98,12 @@ async def generate_report(payload: GenerateReportRequest) -> Dict[str, str]:
 
 
 @router.get("/download/{patient_id}")
-async def download_report(patient_id: str) -> RedirectResponse:
+async def download_report(patient_id: str, request: Request) -> RedirectResponse:
     """Redirects the client to the securely signed cloud storage URL for the report.
 
     Args:
         patient_id (str): The universal identifier of the target patient.
+        request (Request): The incoming FastAPI request (provides access to app state).
 
     Returns:
         RedirectResponse: A 307 Temporary Redirect to the Supabase storage object.
@@ -125,13 +116,8 @@ async def download_report(patient_id: str) -> RedirectResponse:
     if not file_path:
         raise HTTPException(status_code=404, detail="Report not found. Please generate first.")
 
-    supabase_url: str = gateway_config.supabase_url
-    supabase_key: str = gateway_config.supabase_service_role_key
-    if not supabase_url or not supabase_key:
-        raise HTTPException(status_code=500, detail="Supabase credentials not configured")
-
-    sb_client: Client = create_client(supabase_url, supabase_key)
-    signed: Dict[str, Any] = sb_client.storage.from_("medical_reports").create_signed_url(
+    sb_client = request.app.state.supabase_client
+    signed: Dict[str, Any] = await sb_client.storage.from_("medical_reports").create_signed_url(
         file_path, 60 * 60 * 24
     )
     # The response dictionary contains a key named ``signedURL``.

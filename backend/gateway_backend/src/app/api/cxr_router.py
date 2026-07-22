@@ -20,6 +20,7 @@ from httpx import HTTPStatusError, RequestError, AsyncClient, Response, Timeout
 from app.core.config import gateway_config
 from app.core.exceptions import ServiceUnavailableError
 from app.core.security import get_current_user
+from app.utils.attribution_utils import resolve_attribution
 from app.services.scan_persistence_service import ScanPersistenceService
 from app.services.storage_service import StorageService
 
@@ -38,6 +39,7 @@ async def cxr_predict(
     request: Request,
     file: UploadFile = File(...),
     top_k: int = Form(3),
+    patient_id: Optional[str] = Form(None),
     doctor_id: Optional[str] = Form(None),
     user_id: str = Depends(get_current_user),
 ) -> Dict[str, Any]:
@@ -82,7 +84,7 @@ async def cxr_predict(
     headers.pop("Content-Type", None)
     headers.pop("content-length", None)
 
-    # Step 1: Proxy to CXR ML service 
+    # Step 1: Proxy to CXR ML service
     try:
         client: AsyncClient = request.app.state.http_client
         resp: Response = await client.post(
@@ -106,23 +108,15 @@ async def cxr_predict(
 
     ml_result: Dict[str, Any] = resp.json()
 
-    # Steps 2–5: Persistence interceptor 
+    # Steps 2-5: Persistence interceptor
     db_pool = request.app.state.db_pool
 
-    # Guard: user_id must be a valid UUID before any DB/Storage interaction.
-    # In DEV_MODE, get_current_user returns the literal string 'dev-user-uuid'
-    # which is 13 characters and fails asyncpg's ::uuid cast with a DataError.
-    _user_id_is_valid_uuid = True
-    try:
-        uuid.UUID(user_id)
-    except ValueError:
-        _user_id_is_valid_uuid = False
-        logger.warning(
-            "CXR persistence skipped: user_id '%s' is not a valid UUID. "
-            "This is expected in DEV_MODE (dev-token). "
-            "Use a real Supabase JWT to test persistence.",
-            user_id,
-        )
+    final_user_id, final_doctor_id, _user_id_is_valid_uuid = resolve_attribution(
+        user_id=user_id,
+        patient_id=patient_id,
+        doctor_id=doctor_id,
+        service_name="CXR"
+    )
 
     if db_pool and _user_id_is_valid_uuid:
         scan_id: str = str(uuid.uuid4())
@@ -131,11 +125,9 @@ async def cxr_predict(
         image_url: str = ""
         try:
             image_url = await StorageService.upload_scan_image(
-                http_client=client,
-                supabase_url=gateway_config.supabase_url,
-                service_role_key=gateway_config.supabase_service_role_key,
+                supabase_client=request.app.state.supabase_client,
                 bucket=gateway_config.supabase_storage_bucket,
-                user_id=user_id,
+                user_id=final_user_id,
                 scan_id=scan_id,
                 file_bytes=content,
                 content_type=file.content_type,
@@ -155,8 +147,8 @@ async def cxr_predict(
         await ScanPersistenceService.insert_scan_result(
             pool=db_pool,
             scan_id=scan_id,
-            user_id=user_id,
-            doctor_id=doctor_id,
+            user_id=final_user_id,
+            doctor_id=final_doctor_id,
             scan_type=_SCAN_TYPE_CXR,
             scan_status=scan_status,
             image_url=image_url,

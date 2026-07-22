@@ -35,6 +35,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import gateway_config
 from app.core.security import get_current_user
+from app.utils.validation_utils import _validate_uuid
 from app.models.schemas import ScanAlreadySyncedResponse, ScanSyncResponse
 from app.services.scan_persistence_service import ScanPersistenceService
 from app.services.storage_service import StorageService
@@ -49,28 +50,6 @@ _VALID_SCAN_TYPES: frozenset[int] = frozenset({0, 1, 2})
 # Accepted scan_status integers
 _VALID_SCAN_STATUSES: frozenset[int] = frozenset({0, 1, 2})
 
-
-def _validate_uuid(value: str, field_name: str) -> str:
-    """Validates that a string is a well-formed UUID.
-
-    Args:
-        value: The string to validate.
-        field_name: Human-readable field name for the error message.
-
-    Returns:
-        str: The input value (unchanged) if valid.
-
-    Raises:
-        HTTPException: 422 Unprocessable Entity if the value is not a valid UUID.
-    """
-    try:
-        uuid_mod.UUID(value)
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"'{field_name}' must be a valid UUID. Received: '{value}'",
-        )
-    return value
 
 
 @router.post(
@@ -87,9 +66,9 @@ def _validate_uuid(value: str, field_name: str) -> str:
 )
 async def sync_edge_inference(
     request: Request,
-    # --- Image file ---
+    # Image file
     file: UploadFile = File(..., description="The scan image file (JPEG/PNG)."),
-    # --- Required scan identifiers ---
+    # Required scan identifiers
     scan_id: str = Form(
         ...,
         description="Client-generated UUID.  Becomes the PK in scan_results.",
@@ -116,7 +95,7 @@ async def sync_edge_inference(
         ge=0.0,
         le=1.0,
     ),
-    # --- Optional supplementary fields 
+    # Optional supplementary fields
     doctor_id: Optional[str] = Form(
         None,
         description="The doctor's UUID if the scan was captured during a session.",
@@ -129,7 +108,7 @@ async def sync_edge_inference(
         "{}",
         description="Full TFLite inference JSON payload (serialised as a string).",
     ),
-    #  Auth 
+    # Auth
     auth_user_id: str = Depends(get_current_user),
 ) -> JSONResponse:
     """Rehydrates an offline TFLite scan into the cloud ``scan_results`` table.
@@ -168,9 +147,9 @@ async def sync_edge_inference(
             unparseable metadata JSON.
         HTTPException 503: Database pool unavailable (DATABASE_URL not configured).
     """
-    # -------------------------------------------------------------------------
+    #
     # 1. Input validation
-    # -------------------------------------------------------------------------
+    #
     _validate_uuid(scan_id, "scan_id")
     _validate_uuid(user_id, "user_id")
 
@@ -218,9 +197,9 @@ async def sync_edge_inference(
     metadata_dict.setdefault("inference_source", "edge")
     metadata_dict.setdefault("tflite_sync", True)
 
-    # -------------------------------------------------------------------------
+    #
     # 2. File size guard
-    # -------------------------------------------------------------------------
+    #
     content: bytes = await file.read()
 
     if len(content) > gateway_config.max_upload_bytes:
@@ -232,9 +211,9 @@ async def sync_edge_inference(
             ),
         )
 
-    # -------------------------------------------------------------------------
+    #
     # 3. Database pool guard
-    # -------------------------------------------------------------------------
+    #
     db_pool = request.app.state.db_pool
     if not db_pool:
         logger.error(
@@ -246,17 +225,15 @@ async def sync_edge_inference(
             detail="Database persistence is not configured on this server.",
         )
 
-    # -------------------------------------------------------------------------
+    #
     # 4. Upload image to Supabase Storage
-    # -------------------------------------------------------------------------
+    #
     http_client = request.app.state.http_client
     image_url: str = ""
 
     try:
         image_url = await StorageService.upload_scan_image(
-            http_client=http_client,
-            supabase_url=gateway_config.supabase_url,
-            service_role_key=gateway_config.supabase_service_role_key,
+            supabase_client=request.app.state.supabase_client,
             bucket=gateway_config.supabase_storage_bucket,
             user_id=user_id,
             scan_id=scan_id,
@@ -272,9 +249,9 @@ async def sync_edge_inference(
             exc,
         )
 
-    # -------------------------------------------------------------------------
+    #
     # 5. Insert into scan_results (idempotent)
-    # -------------------------------------------------------------------------
+    #
     was_inserted: bool = await ScanPersistenceService.insert_scan_result(
         pool=db_pool,
         scan_id=scan_id,
@@ -290,9 +267,9 @@ async def sync_edge_inference(
         inference_source="edge",
     )
 
-    # -------------------------------------------------------------------------
+    #
     # 6. Return appropriate response
-    # -------------------------------------------------------------------------
+    #
     if was_inserted:
         return JSONResponse(
             status_code=status.HTTP_200_OK,

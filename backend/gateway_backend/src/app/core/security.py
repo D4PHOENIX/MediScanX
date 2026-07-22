@@ -83,7 +83,7 @@ async def get_current_user(
         logger.info("Developer token accepted")
         return "dev-user-uuid"
 
-    # Supabase JWT validation 
+    # Supabase JWT validation
     try:
         unverified_header = jwt.get_unverified_header(token)
         if not unverified_header.get("kid"):
