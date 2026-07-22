@@ -50,7 +50,7 @@ jobs:
         runs-on: ubuntu-latest
         defaults:
             run:
-                working-directory: gateway_backend
+                working-directory: backend/gateway_backend
 
         env:
             # -----------------------------------------------------------------------
@@ -155,7 +155,7 @@ jobs:
               uses: actions/upload-artifact@v4
               with:
                   name: gateway-pytest-results-${{ github.run_number }}
-                  path: gateway_backend/pytest-results.xml
+                  path: backend/gateway_backend/pytest-results.xml
                   retention-days: 7
 
     # =============================================================================
@@ -182,7 +182,7 @@ jobs:
             - name: Build gateway_backend Docker image
               uses: docker/build-push-action@v6
               with:
-                  context: ./gateway_backend
+                  context: ./backend/gateway_backend
                   push: false
                   load: true
                   no-cache: true
