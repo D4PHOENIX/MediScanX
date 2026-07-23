@@ -35,8 +35,8 @@ async def test_predict_wfdb_mode(test_app, async_client: AsyncClient) -> None:
         response = await async_client.post(
             "/predict",
             files=[
-                ("files", ("test.dat", b"fake_dat_binary", "application/octet-stream")),
-                ("files", ("test.hea", b"fake_hea_text", "text/plain")),
+                ("wfdb_files", ("test.dat", b"fake_dat_binary", "application/octet-stream")),
+                ("wfdb_files", ("test.hea", b"fake_hea_text", "text/plain")),
             ],
         )
 
@@ -80,7 +80,7 @@ async def test_predict_image_mode(test_app, async_client: AsyncClient) -> None:
         response = await async_client.post(
             "/predict",
             files=[
-                ("files", ("ecg.jpg", b"\xff\xd8\xff\xe0" + b"\x00" * 100, "image/jpeg")),
+                ("file", ("ecg.jpg", b"\xff\xd8\xff\xe0" + b"\x00" * 100, "image/jpeg")),
             ],
         )
 
@@ -110,7 +110,7 @@ async def test_predict_unsupported_content_type(test_app, async_client: AsyncCli
         response = await async_client.post(
             "/predict",
             files=[
-                ("files", ("report.pdf", b"%PDF-1.4", "application/pdf")),
+                ("file", ("report.pdf", b"%PDF-1.4", "application/pdf")),
             ],
         )
         assert response.status_code == 415
@@ -134,9 +134,9 @@ async def test_predict_wrong_file_count(test_app, async_client: AsyncClient) -> 
         response = await async_client.post(
             "/predict",
             files=[
-                ("files", ("a.dat", b"x", "application/octet-stream")),
-                ("files", ("b.hea", b"y", "text/plain")),
-                ("files", ("c.dat", b"z", "application/octet-stream")),
+                ("wfdb_files", ("a.dat", b"x", "application/octet-stream")),
+                ("wfdb_files", ("b.hea", b"y", "text/plain")),
+                ("wfdb_files", ("c.dat", b"z", "application/octet-stream")),
             ],
         )
         assert response.status_code == 400
