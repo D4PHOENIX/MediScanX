@@ -3,7 +3,7 @@ import tempfile
 from pathlib import Path
 from typing import Dict, Any, Set, Optional, List
 
-from fastapi import APIRouter, File, UploadFile, Depends, Query
+from fastapi import APIRouter, File, UploadFile, Depends, Query, Form
 from fastapi.responses import JSONResponse
 
 from app.core.exceptions import ECGEngineNotReadyError, ECGBaseException
@@ -48,7 +48,9 @@ _IMAGE_CONTENT_TYPES: Set[str] = {"image/jpeg", "image/png", "image/jpg"}
 
 @router.post("/predict")
 async def predict(
-    files: List[UploadFile] = File(..., description="Upload one image file OR two WFDB files (.dat + .hea)"),
+    file: Optional[UploadFile] = File(None, description="Single ECG image file"),
+    wfdb_files: Optional[List[UploadFile]] = File(None, description="Pair of .dat and .hea WFDB files"),
+    top_k: int = Form(5, description="Number of top classes to return"),
     xai: bool = Query(default=False, description="Set to true to include a base64-encoded Grad-CAM overlay."),
     engine: ECGEngine = Depends(get_engine)
 ) -> JSONResponse:
@@ -58,7 +60,9 @@ async def predict(
     for the specified number of top classes.
 
     Args:
-        files (List[UploadFile]): The uploaded files.
+        file (Optional[UploadFile]): The uploaded image file.
+        wfdb_files (Optional[List[UploadFile]]): The uploaded WFDB files.
+        top_k (int): Number of top classes to return.
         xai (bool, optional): Whether to generate Grad-CAM heatmaps. Defaults to False.
         engine (ECGEngine): The injected ECG inference engine.
 
@@ -70,26 +74,24 @@ async def predict(
     """
     result: Dict[str, Any] = {}
 
-    if len(files) == 1:
-        upload: UploadFile = files[0]
-        content_type: str = (upload.content_type or "").split(";")[0].strip().lower()
+    if file is not None:
+        content_type: str = (file.content_type or "").split(";")[0].strip().lower()
 
         if content_type not in _IMAGE_CONTENT_TYPES:
             raise ECGBaseException(
                 status_code=415,
                 message=(
                     f"Unsupported content type '{content_type}'. "
-                    "Supply a single JPEG/PNG image, "
-                    "or two WFDB files (.dat + .hea)."
+                    "Supply a single JPEG/PNG image."
                 ),
             )
 
-        suffix: str = Path(upload.filename or "ecg.jpg").suffix or ".jpg"
+        suffix: str = Path(file.filename or "ecg.jpg").suffix or ".jpg"
         tmp_fd: int
         tmp_path: str
         tmp_fd, tmp_path = tempfile.mkstemp(suffix=suffix)
         try:
-            contents: bytes = await upload.read()
+            contents: bytes = await file.read()
             with os.fdopen(tmp_fd, "wb") as f:
                 f.write(contents)
 
@@ -97,6 +99,7 @@ async def predict(
                 image_path=tmp_path,
                 input_type="image",
                 use_gradcam=xai,
+                top_k=top_k,
             )
         finally:
             try:
@@ -104,10 +107,10 @@ async def predict(
             except OSError:
                 pass
 
-    elif len(files) == 2:
+    elif wfdb_files is not None and len(wfdb_files) == 2:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_dir_path: Path = Path(tmp_dir)
-            for upload in files:
+            for upload in wfdb_files:
                 filename: str = upload.filename or ""
                 contents = await upload.read()
                 dest: Path = tmp_dir_path / Path(filename).name
@@ -128,13 +131,14 @@ async def predict(
                 image_path=record_path,
                 input_type="wfdb",
                 use_gradcam=xai,
+                top_k=top_k,
             )
     else:
         raise ECGBaseException(
             status_code=400,
             message=(
                 "Expected 1 file (image) or 2 files (WFDB .dat + .hea). "
-                f"Received {len(files)} file(s)."
+                f"Received invalid input."
             ),
         )
 
