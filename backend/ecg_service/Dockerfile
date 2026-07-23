@@ -45,6 +45,8 @@ COPY --chown=mediscan:mediscan ./src /app/src
 # Drop root privileges for security
 USER mediscan
 
+ENV MPLCONFIGDIR=/tmp/matplotlib
+
 # The ECG microservice listens on port 8002
 EXPOSE 8002
 

@@ -81,6 +81,7 @@ async def ecg_predict(
     headers.pop("content-type", None)
     headers.pop("Content-Type", None)
     headers.pop("content-length", None)
+    headers.pop("Content-Length", None)
 
     # Step 1: Proxy to ECG ML service
     try:
