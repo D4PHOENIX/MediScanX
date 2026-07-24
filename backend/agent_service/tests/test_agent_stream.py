@@ -11,15 +11,14 @@ async def _fake_stream_events(*args, **kwargs):
 
 
 @pytest.mark.asyncio
-async def test_sse_compliance(test_app, async_client: AsyncClient) -> None:
+async def test_sse_compliance(test_app, async_client, auth_headers: AsyncClient) -> None:
     """Assert that POST /chat returns a text/event-stream response whose
     payload contains correctly formatted SSE text events.
     """
     # Override the graph's astream_events to return our fake sequence
     test_app.state.graph.astream_events = _fake_stream_events
 
-    response = await async_client.post(
-        "/chat",
+    response = await async_client.post("/chat", headers=auth_headers,
         json={
             "messages": [{"role": "user", "content": "Analyze patient 123."}],
             "patient_id": "00000000-0000-0000-0000-000000000123",
@@ -40,7 +39,7 @@ async def test_sse_compliance(test_app, async_client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_sse_streaming_error_handling(test_app, async_client: AsyncClient) -> None:
+async def test_sse_streaming_error_handling(test_app, async_client, auth_headers: AsyncClient) -> None:
     """Verify that domain exceptions during streaming yield the standard error envelope."""
     from app.core.exceptions import AgentBaseException
 
@@ -50,8 +49,7 @@ async def test_sse_streaming_error_handling(test_app, async_client: AsyncClient)
 
     test_app.state.graph.astream_events = _fake_error_stream
 
-    response = await async_client.post(
-        "/chat",
+    response = await async_client.post("/chat", headers=auth_headers,
         json={
             "messages": [{"role": "user", "content": "Analyze"}],
             "patient_id": "00000000-0000-0000-0000-000000000eee",
@@ -71,7 +69,7 @@ async def test_sse_streaming_error_handling(test_app, async_client: AsyncClient)
 
 
 @pytest.mark.asyncio
-async def test_error_envelope_format(test_app, async_client: AsyncClient) -> None:
+async def test_error_envelope_format(test_app, async_client, auth_headers: AsyncClient) -> None:
     """Verify the domain exception handler returns the standard
     {error: true, type, message, context} JSON envelope.
     """
@@ -84,8 +82,7 @@ async def test_error_envelope_format(test_app, async_client: AsyncClient) -> Non
 
     test_app.state.graph.astream_events = _error_stream
 
-    response = await async_client.post(
-        "/chat",
+    response = await async_client.post("/chat", headers=auth_headers,
         json={
             "messages": [{"role": "user", "content": "test"}],
             "patient_id": "00000000-0000-0000-0000-000000000fff",

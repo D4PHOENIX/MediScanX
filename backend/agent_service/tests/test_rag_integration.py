@@ -93,7 +93,7 @@ async def db_pool(postgres_container):
 
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Integration test requires local schema file which is not checked into version control")
 @pytest.mark.asyncio
-async def test_rag_integration_end_to_end(db_pool):
+async def test_rag_integration_end_to_end(db_pool, auth_headers):
     config = RunnableConfig(configurable={"db_pool": db_pool})
     
     with patch("app.agent.tools.rag_tool._get_config") as mock_get_config:
