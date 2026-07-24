@@ -21,7 +21,7 @@ async def test_mock_langgraph_state(test_app) -> None:
 
 
 @pytest.mark.asyncio
-async def test_thread_id_isolation(test_app, async_client: AsyncClient) -> None:
+async def test_thread_id_isolation(test_app, async_client: AsyncClient, auth_headers) -> None:
     """Verify that distinct patient_ids produce distinct thread_ids in the
     LangGraph configurable dict, preventing cross-patient state bleed.
     """
@@ -41,6 +41,7 @@ async def test_thread_id_isolation(test_app, async_client: AsyncClient) -> None:
                 "messages": [{"role": "user", "content": "Hi"}],
                 "patient_id": patient_id,
             },
+            headers=auth_headers,
         )
 
     assert len(captured_configs) == 2
@@ -51,7 +52,7 @@ async def test_thread_id_isolation(test_app, async_client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_engine_not_ready_guard() -> None:
+async def test_engine_not_ready_guard(auth_headers) -> None:
     """Verify that requests return 503 when the graph is not initialized."""
     from fastapi import FastAPI
     from app.core.exceptions import ExceptionRegistry
@@ -72,6 +73,7 @@ async def test_engine_not_ready_guard() -> None:
                 "messages": [{"role": "user", "content": "test"}],
                 "patient_id": "00000000-0000-0000-0000-000000000eee",
             },
+            headers=auth_headers,
         )
 
     assert response.status_code == 503

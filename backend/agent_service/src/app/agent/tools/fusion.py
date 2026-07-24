@@ -103,8 +103,8 @@ async def fuse_multimodal_findings(
 
 async def _run_fusion_queries(
     conn: asyncpg.Connection,
-    patient_id: str,
-    selected_scan_ids: Optional[List[str]],
+    auth_user_id: str,
+    selected_scan_ids: Optional[List[uuid.UUID]],
 ) -> Dict[str, Any]:
     """Execute fusion orchestration queries against an open database connection.
 
@@ -113,22 +113,22 @@ async def _run_fusion_queries(
 
     Args:
         conn: Active asyncpg connection.
-        patient_id: Unique patient identifier.
+        auth_user_id: Unique user identifier for tenant isolation.
         selected_scan_ids: Optional list of scan identifiers chosen for fusion.
 
     Returns:
         Dict[str, Any]: Modality-keyed inference payloads or a descriptive message.
     """
     try:
-        # ----- IDs provided -----
+        # IDs provided
         if selected_scan_ids and len(selected_scan_ids) > 0:
             rows = await conn.fetch(
                 """
                 SELECT id, modality, predicted_class, probabilities
                 FROM scan_results
-                WHERE id = ANY($1::text[])
+                WHERE id = ANY($1::uuid[]) AND user_id = $2
                 """,
-                selected_scan_ids,
+                selected_scan_ids, auth_user_id
             )
             # Group by modality, keep the last seen payload
             per_modality: Dict[str, Dict[str, Any]] = {}
@@ -137,8 +137,8 @@ async def _run_fusion_queries(
                 prob = row["probabilities"]
                 try:
                     prob_dict = dict(prob) if prob else {}
-                except Exception:
-                    prob_dict = {}
+                except Exception as exc:
+                    raise ValueError(f"Failed to parse probabilities for modality {mod}") from exc
                 per_modality[mod] = {
                     "predicted_class": row.get("predicted_class"),
                     "probabilities": prob_dict,
@@ -156,16 +156,16 @@ async def _run_fusion_queries(
                 return {"message": "No valid scans found for the provided IDs."}
             return result
 
-        # ----- IDs missing: query recent scans -----
+        # IDs missing: query recent scans
         rows = await conn.fetch(
             """
             SELECT id, modality, predicted_class, created_at
             FROM scan_results
-            WHERE patient_id = $1
+            WHERE user_id = $1
             ORDER BY created_at DESC
             LIMIT 10
             """,
-            patient_id,
+            auth_user_id,
         )
 
         if not rows:
@@ -185,13 +185,13 @@ async def _run_fusion_queries(
 
     except Exception as exc:
         logger.exception("Fusion orchestration failed: %s", exc)
-        return {"message": f"Error during fusion orchestration: {exc}"}
+        raise RuntimeError("Error during fusion orchestration.") from exc
 
 
+import uuid
 @tool(args_schema=OrchestrateFusionSchema)
 async def orchestrate_fusion(
-    patient_id: str,
-    selected_scan_ids: Optional[List[str]] = None,
+    selected_scan_ids: Optional[List[uuid.UUID]] = None,
     config: RunnableConfig = None,
 ) -> Dict[str, Any]:
     """Selective fusion orchestrator that fetches inference payloads for chosen scans.
@@ -206,25 +206,28 @@ async def orchestrate_fusion(
     scans they want to fuse.
 
     Args:
-        patient_id (str): Unique patient identifier.
-        selected_scan_ids (Optional[List[str]]): Optional list of scan identifiers chosen by the
+        selected_scan_ids (Optional[List[uuid.UUID]]): Optional list of scan identifiers chosen by the
             user for fusion.
-        config (RunnableConfig): Injected LangGraph config containing the db_pool.
+        config (RunnableConfig): Injected LangGraph config containing the db_pool and auth_user_id.
 
     Returns:
         Dict[str, Any]: Dictionary containing the required payloads for subsequent fusion,
         or a human-readable message requesting further input.
     """
+    auth_user_id = config.get("configurable", {}).get("auth_user_id") if config else None
+    if not auth_user_id:
+        return {"message": "Authentication error: auth_user_id not found in context."}
+
     db_pool = config.get("configurable", {}).get("db_pool") if config else None
     if db_pool is not None:
         async with db_pool.acquire() as conn:
-            return await _run_fusion_queries(conn, patient_id, selected_scan_ids)
+            return await _run_fusion_queries(conn, auth_user_id, selected_scan_ids)
     else:
         dsn = _get_config().database_url
         if not dsn:
             return {"message": "DATABASE_URL environment variable not set — cannot fetch scans."}
         conn = await asyncpg.connect(dsn)
         try:
-            return await _run_fusion_queries(conn, patient_id, selected_scan_ids)
+            return await _run_fusion_queries(conn, auth_user_id, selected_scan_ids)
         finally:
             await conn.close()

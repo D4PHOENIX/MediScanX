@@ -176,7 +176,7 @@ jobs:
               run: |
                   docker run --rm \
                     -e GEMINI_API_KEY=ci-dummy \
-                    -e DATABASE_URL=postgresql://ci:ci@localhost/ci \
+                    -e DATABASE_URL=postgresql://ci:ci@aws-0-eu-central-1.pooler.supabase.com:5432/ci \
                     -e SUPABASE_URL=http://localhost \
                     -e SUPABASE_SECRET_KEY=ci-dummy \
                     ${{ env.IMAGE_NAME }}:pr-${{ github.event.pull_request.number }} \

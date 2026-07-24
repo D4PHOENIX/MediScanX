@@ -32,6 +32,7 @@ async def _event_generator(
     graph: Any,
     initial_state: Dict[str, Any],
     thread_id: str,
+    auth_user_id: str,
 ) -> AsyncGenerator[str, None]:
     """Stream LangGraph events and yield Server-Sent Event (SSE) chunks.
 
@@ -54,6 +55,8 @@ async def _event_generator(
             # and correctly maps to the (thread_id, checkpoint_id) PK in the
             # checkpoints table.
             "thread_id": thread_id,
+            # Server-side identity injected here so tools can extract it securely
+            "auth_user_id": auth_user_id,
         },
     }
 
@@ -168,8 +171,15 @@ async def _event_generator(
     yield _format_sse("done", {})
 
 
+from app.core.security import get_current_user
+from fastapi import Depends
+
 @router.post("")
-async def chat_endpoint(request: Request, payload: ChatRequest) -> StreamingResponse:
+async def chat_endpoint(
+    request: Request, 
+    payload: ChatRequest,
+    auth_user_id: str = Depends(get_current_user),
+) -> StreamingResponse:
     """Stream assistant responses and tool invocations via SSE.
 
     The ``thread_id`` sent to the LangGraph checkpointer is derived from
@@ -186,6 +196,7 @@ async def chat_endpoint(request: Request, payload: ChatRequest) -> StreamingResp
     Args:
         request (Request): The incoming FastAPI HTTP request.
         payload (ChatRequest): The validated request payload containing conversation messages.
+        auth_user_id (str): The verified identity of the caller.
 
     Returns:
         StreamingResponse: An asynchronous Server-Sent Event stream emitting LangGraph outcomes.
@@ -196,10 +207,6 @@ async def chat_endpoint(request: Request, payload: ChatRequest) -> StreamingResp
 
     # Resolve the compiled graph from app state (set during lifespan startup).
     graph = request.app.state.graph
-
-    # Derive a stable, unique thread_id from patient_id.
-    auth_header = request.headers.get("Authorization", "")
-    is_dev = auth_header.strip() == "Bearer dev-token"
 
     patient_uuid = str(payload.patient_id) if payload.patient_id else ""
     current_scan_uuid = str(payload.current_scan_id) if payload.current_scan_id else ""
@@ -218,7 +225,7 @@ async def chat_endpoint(request: Request, payload: ChatRequest) -> StreamingResp
     }
 
     return StreamingResponse(
-        _event_generator(graph, initial_state, thread_id),
+        _event_generator(graph, initial_state, thread_id, auth_user_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

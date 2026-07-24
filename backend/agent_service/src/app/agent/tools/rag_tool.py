@@ -91,9 +91,9 @@ async def search_clinical_guidelines(
     if not _get_config().database_url:
         return "Error: Database URL is not configured — cannot search guidelines."
 
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     # Step 0: Direct Glossary Match
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     glossary_row = None
     if finding_label:
         async def _fetch_glossary(conn: asyncpg.Connection):
@@ -113,10 +113,11 @@ async def search_clinical_guidelines(
                     await conn.close()
         except Exception as exc:
             logger.exception("Glossary search failed: %s", exc)
+            raise RuntimeError(f"Database error during glossary search: {exc}") from exc
 
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     # Step 1: Embed the query (CPU-bound — offloaded to a thread pool)
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     def _embed(text: str) -> List[float]:
         tokenizer, model = _get_query_encoder()
         with torch.no_grad():
@@ -131,11 +132,11 @@ async def search_clinical_guidelines(
         query_vector: List[float] = await asyncio.to_thread(_embed, query)
     except Exception as exc:
         logger.exception("Failed to embed query: %s", exc)
-        return f"Error: Could not generate embedding for the query — {exc}"
+        raise RuntimeError(f"Could not generate embedding for the query: {exc}") from exc
 
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     # Step 2: Execute the pgvector similarity search
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
 
     async def _execute_search(conn: asyncpg.Connection) -> List[asyncpg.Record]:
         vector_literal = "[" + ",".join(str(v) for v in query_vector) + "]"
@@ -158,11 +159,11 @@ async def search_clinical_guidelines(
                 await conn.close()
     except Exception as exc:
         logger.exception("Vector search failed: %s", exc)
-        return f"Error: Clinical guidelines search failed — {exc}"
+        raise RuntimeError(f"Clinical guidelines search failed: {exc}") from exc
 
-    # ------------------------------------------------------------------
-    # Step 2.5: Rerank
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
+    # Step 2.1: Rerank
+    # ---------------------------------------------------------------------------
     if _get_config().rerank_enabled and rows:
         def _rerank(docs: List[asyncpg.Record]) -> List[asyncpg.Record]:
             tokenizer, model = _get_cross_encoder()
@@ -179,10 +180,11 @@ async def search_clinical_guidelines(
             rows = await asyncio.to_thread(_rerank, rows)
         except Exception as exc:
             logger.exception("Failed to rerank: %s", exc)
+            raise RuntimeError(f"Failed to rerank search results: {exc}") from exc
 
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     # Step 3: Build structured citation records
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     citation_records: List[Dict[str, Any]] = []
     seen_ids = set()
 

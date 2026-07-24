@@ -109,14 +109,17 @@ class SearchClinicalGuidelinesSchema(BaseModel):
 
 
 class CalculateTemporalProgressionSchema(BaseModel):
-    current_scan_id: str = Field(description="Identifier of the scan to be assessed.")
-    previous_scan_id: Optional[str] = Field(default=None, description="Identifier of a specific previous scan (optional).")
+    current_scan_id: UUID = Field(description="Identifier of the scan to be assessed.")
+    previous_scan_id: Optional[UUID] = Field(default=None, description="Identifier of a specific previous scan (optional).")
 
 
 class QueryPatientMetricsSchema(BaseModel):
-    patient_id: str = Field(description="The unique identifier of the patient to query.")
+    pass  # patient_id is derived from auth_user_id in config
+
+
+class ListRecentScansSchema(BaseModel):
+    limit: int = Field(default=5, description="Maximum number of recent scans to return.")
 
 
 class OrchestrateFusionSchema(BaseModel):
-    patient_id: str = Field(description="Unique patient identifier.")
-    selected_scan_ids: Optional[List[str]] = Field(default=None, description="Optional list of scan identifiers chosen by the user for fusion.")
+    selected_scan_ids: Optional[List[UUID]] = Field(default=None, description="Optional list of scan identifiers chosen by the user for fusion.")

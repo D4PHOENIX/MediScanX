@@ -24,7 +24,7 @@ from app.agent.tools.ml_tools import (
     run_skin_inference,
 )
 from app.agent.tools.rag_tool import search_clinical_guidelines
-from app.agent.tools.temporal import calculate_temporal_progression, query_patient_metrics
+from app.agent.tools.temporal import list_recent_scans
 
 logger = logging.getLogger(__name__)
 
@@ -64,15 +64,8 @@ assistant embedded in the MediScanX diagnostic platform.
 
 ## Tool Usage Guidelines
 - `search_clinical_guidelines` — Use for any medical knowledge query.
-- `run_cxr_inference` — Use when the user provides a chest X-ray image.
-- `run_ecg_inference` — Use when the user provides ECG/EKG data.
-- `run_skin_inference` — Use when the user provides a skin lesion image.
-- `calculate_temporal_progression` — Use to compare two scans over time.
-- `query_patient_metrics` — Use to retrieve a patient's vitals/labs.
-- `fuse_multimodal_findings` — Use to aggregate multi-modality results \
-  into a single weighted risk score.
-- `orchestrate_fusion` — Use to fetch inference payloads for a patient \
-  before passing them to `fuse_multimodal_findings`.
+- `run_multimodal_fusion` — Use when asked to combine/compare results from different modalities.
+- `list_recent_scans` — Use to retrieve a list of the patient's recent scans and their identifiers.
 
 ## Safety & Compliance
 - Never diagnose definitively. Frame outputs as "findings suggestive of" \
@@ -91,8 +84,7 @@ TOOLS: List[BaseTool] = [
     run_ecg_inference,
     run_skin_inference,
     search_clinical_guidelines,
-    calculate_temporal_progression,
-    query_patient_metrics,
+    list_recent_scans,
     fuse_multimodal_findings,
     orchestrate_fusion,
 ]
@@ -180,7 +172,7 @@ async def build_graph(
         Tuple[Any, AsyncPostgresSaver]: A tuple of ``(compiled_graph, checkpointer)`` where the compiled graph
         is ready to serve requests and the checkpointer owns the DB connection pool.
     """
-    # --- LLM ---
+    # LLM
     llm = ChatGoogleGenerativeAI(
         model=google_model,
         api_key=gemini_api_key,
@@ -189,7 +181,7 @@ async def build_graph(
     )
     model_with_tools = llm.bind_tools(TOOLS)
 
-    # --- Checkpointer ---
+    # Checkpointer
     # AsyncPostgresSaver maps to the checkpoints / checkpoint_blobs /
     # checkpoint_writes tables defined in schema/0001_initial_schema.sql.
     import psycopg_pool
@@ -201,7 +193,7 @@ async def build_graph(
         await checkpointer.setup()
         logger.info("AsyncPostgresSaver initialised and schema verified.")
 
-        # --- Graph definition ---
+        # Graph definition
         builder = StateGraph(AgentState)
 
         async def _call_model_bound(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
