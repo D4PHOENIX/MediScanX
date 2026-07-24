@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 from app.services.storage_service import StorageService
 
 @pytest.mark.asyncio
-async def test_storage_upload_correct_bucket_and_path():
+async def test_storage_upload_correct_bucket_and_path(auth_headers):
     # Mock Supabase async client
     mock_supabase = MagicMock()
     mock_storage = MagicMock()
@@ -22,7 +22,7 @@ async def test_storage_upload_correct_bucket_and_path():
     bucket_name = "test-bucket"
     
     # Call the service
-    url = await StorageService.upload_scan_image(
+    public_url, storage_path = await StorageService.upload_scan_image(
         supabase_client=mock_supabase,
         bucket=bucket_name,
         user_id=user_id,
@@ -31,7 +31,8 @@ async def test_storage_upload_correct_bucket_and_path():
         content_type=content_type,
     )
     
-    assert url == "https://mock-url.com/scan.jpg"
+    assert public_url == "https://mock-url.com/scan.jpg"
+    assert storage_path == "user-123/scan-456.jpg"
     
     # Assert bucket selection
     mock_storage.from_.assert_called_once_with("test-bucket")
