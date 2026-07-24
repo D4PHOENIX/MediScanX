@@ -24,7 +24,7 @@ class AgentConfig:
         google_project (Optional[str]): Google Cloud project identifier.
         google_credentials_path (Optional[str]): File path to Google Application Credentials JSON.
         supabase_url (Optional[str]): Endpoint URL for the Supabase instance.
-        supabase_service_role_key (Optional[str]): Service role key for Supabase administrative access.
+        supabase_secret_key (Optional[str]): Service role key for Supabase administrative access.
         database_url (Optional[str]): PostgreSQL connection string for the primary clinical database.
         cxr_service_url (str): Downstream URL for the Chest X-Ray diagnostic microservice.
         ecg_service_url (str): Downstream URL for the Electrocardiogram analysis microservice.
@@ -43,6 +43,13 @@ class AgentConfig:
 
     # Supabase / database
     database_url: Optional[str] = field(default_factory=lambda: os.getenv("DATABASE_URL", None))
+    supabase_url: Optional[str] = field(default_factory=lambda: os.getenv("SUPABASE_URL", None))
+    supabase_secret_key: Optional[str] = field(default_factory=lambda: os.getenv("SUPABASE_SECRET_KEY", None))
+    supabase_jwks_url: Optional[str] = field(default_factory=lambda: os.getenv("SUPABASE_JWKS_URL", None))
+
+    # Dev/Auth settings
+    dev_mode: bool = field(default_factory=lambda: os.getenv("DEV_MODE", "False").lower() in ("true", "1", "t"))
+    dev_token_secret: Optional[str] = field(default_factory=lambda: os.getenv("DEV_TOKEN_SECRET", None))
 
     def __post_init__(self):
         """Validates configuration after initialization."""

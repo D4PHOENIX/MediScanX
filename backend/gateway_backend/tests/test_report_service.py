@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 client = TestClient(app)
 
-def test_pdf_generation_produces_valid_artifact():
+def test_pdf_generation_produces_valid_artifact(auth_headers):
     # Setup Generator
     gen = ReportGenerator()
     
@@ -24,7 +24,7 @@ def test_pdf_generation_produces_valid_artifact():
 
 
 @pytest.mark.asyncio
-async def test_download_endpoint_existing_report_redirects():
+async def test_download_endpoint_existing_report_redirects(auth_headers):
     mock_supabase_client = MagicMock()
     mock_bucket = AsyncMock()
     mock_supabase_client.storage.from_.return_value = mock_bucket
@@ -51,7 +51,7 @@ async def test_download_endpoint_existing_report_redirects():
 
 
 @pytest.mark.asyncio
-async def test_download_endpoint_missing_report_returns_404():
+async def test_download_endpoint_missing_report_returns_404(auth_headers):
     mock_supabase_client = MagicMock()
     mock_bucket = AsyncMock()
     mock_supabase_client.storage.from_.return_value = mock_bucket

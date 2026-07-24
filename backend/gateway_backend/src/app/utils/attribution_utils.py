@@ -23,8 +23,26 @@ def resolve_attribution(
         Tuple containing final_user_id (the patient), final_doctor_id, and a boolean indicating
         if final_user_id is a valid UUID (required for persistence).
     """
-    final_user_id = patient_id if patient_id else user_id
-    final_doctor_id = user_id if patient_id else doctor_id
+    from fastapi import HTTPException, status
+    
+    # Gate doctor attribution: because there is currently no role verification
+    # or doctor-patient relationship model, we strictly prevent any caller from
+    # attributing a scan to a different user.
+    if patient_id and patient_id != user_id:
+        logger.warning(
+            "[%s] Doctor attribution blocked: user_id=%s attempted to attribute scan to patient_id=%s. "
+            "Doctor attribution is currently disabled until RBAC is implemented.",
+            service_name,
+            user_id,
+            patient_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Doctor attribution is currently disabled. You may only upload scans for your own account.",
+        )
+
+    final_user_id = user_id
+    final_doctor_id = doctor_id
 
     is_valid_uuid = True
     try:

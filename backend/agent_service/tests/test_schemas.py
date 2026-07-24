@@ -1,6 +1,6 @@
 import pytest
 
-def test_schemas_validation() -> None:
+def test_schemas_validation(auth_headers) -> None:
     """Verify strict Pydantic V2 schemas enforce type constraints."""
     from app.models.schemas import RoleMessage, ChatRequest, Citation
 

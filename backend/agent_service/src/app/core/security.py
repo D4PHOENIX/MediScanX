@@ -1,9 +1,8 @@
-"""Comprehensive security and authentication validation utilities.
+"""Comprehensive security and authentication validation utilities for the Agent Service.
 
-This module enforces access control across the gateway API by validating incoming
-JSON Web Tokens (JWT) against the configured identity provider's JWKS. It also
-provides an optional, strictly-controlled bypass mechanism for isolated development
-environments.
+This module enforces access control by validating incoming JSON Web Tokens (JWT) 
+against the configured identity provider's JWKS. It also provides an optional, 
+strictly-controlled bypass mechanism for isolated development environments.
 """
 
 import json
@@ -17,21 +16,20 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import JWTError, ExpiredSignatureError, jwt
 
-from .config import gateway_config
+from .config import AgentConfig
 
 logger: logging.Logger = logging.getLogger(__name__)
 
 security_scheme: HTTPBearer = HTTPBearer(auto_error=False)
 
+# To avoid circular imports or relying on app.state here, we instantiate the config or we expect it.
+# Actually, it's better to instantiate one globally for security.
+agent_config = AgentConfig()
 
 
 @lru_cache(maxsize=1)
 def get_jwks(jwks_url: str) -> Dict[str, Any]:
     """Retrieves and caches the JSON Web Key Set (JWKS) from the identity provider.
-
-    Executes a synchronous HTTP request to fetch the public keys required for
-    verifying incoming JWT signatures. The result is cached to minimize latency
-    and network overhead during subsequent authentication attempts.
 
     Args:
         jwks_url (str): The absolute URL endpoint hosting the JWKS payload.
@@ -47,11 +45,6 @@ async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme),
 ) -> str:
     """Authenticates the incoming request via JWT validation or developer bypass.
-
-    This dependency is injected into protected routing endpoints. It extracts
-    the Bearer token, validates its structural integrity and cryptologic signature
-    against the cached JWKS, and verifies expiration parameters. It returns the
-    authenticated user's internal identifier upon success.
 
     Args:
         credentials (Optional[HTTPAuthorizationCredentials], optional): The bearer token
@@ -74,14 +67,21 @@ async def get_current_user(
     token: str = credentials.credentials
 
     # Developer-token by‑pass – *only* active in DEV_MODE
-    if gateway_config.dev_mode and gateway_config.dev_token_secret:
-        if secrets.compare_digest(token, gateway_config.dev_token_secret):
+    if agent_config.dev_mode and agent_config.dev_token_secret:
+        if secrets.compare_digest(token, agent_config.dev_token_secret):
             logger.info("Developer token accepted")
             # Note: This is a dummy valid UUID so it doesn't fail UUID DB constraints.
             # However, since it doesn't exist in auth.users, it will still fail RLS or FK constraints if used directly.
             return "00000000-0000-0000-0000-000000000000"
 
     # Supabase JWT validation
+    if not agent_config.supabase_jwks_url:
+        logger.error("SUPABASE_JWKS_URL is not configured for JWT validation.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Server identity provider configuration error",
+        )
+
     try:
         unverified_header = jwt.get_unverified_header(token)
         if not unverified_header.get("kid"):
@@ -90,7 +90,7 @@ async def get_current_user(
                 detail="Missing key ID (kid) in token header",
             )
             
-        jwks = get_jwks(gateway_config.supabase_jwks_url)
+        jwks = get_jwks(agent_config.supabase_jwks_url)
         
         payload: dict = jwt.decode(
             token,

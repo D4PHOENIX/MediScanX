@@ -54,12 +54,14 @@ def pytest_configure(config) -> None:
 # ----------------------------------------------------------------
 os.environ.setdefault("GEMINI_API_KEY", "dummy-gemini-key-for-testing")
 os.environ.setdefault("GOOGLE_MODEL", "gemini-2.5-flash")
-os.environ.setdefault("DATABASE_URL", "postgresql://mock_user:mock_pass@aws-0-eu-central-1.pooler.supabase.com:5432/mock_db")
+os.environ.setdefault("DATABASE_URL", "postgresql://test:test@aws-0-eu-central-1.pooler.supabase.com:5432/test")
+os.environ.setdefault("SUPABASE_URL", "http://mock-supabase")
+os.environ.setdefault("SUPABASE_PUBLISHABLE_KEY", "mock-publishable-key")
+os.environ.setdefault("SUPABASE_SECRET_KEY", "mock-secret-key")
+os.environ.setdefault("SUPABASE_JWKS_URL", "http://mock-supabase/.well-known/jwks.json")
 os.environ.setdefault("CXR_SERVICE_URL", "http://mock-cxr:8001/predict")
 os.environ.setdefault("ECG_SERVICE_URL", "http://mock-ecg:8002/predict")
 os.environ.setdefault("SKIN_SERVICE_URL", "http://mock-skin:8003/predict")
-os.environ.setdefault("SUPABASE_URL", "http://mock-supabase")
-os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "mock-service-role-key")
 
 
 # ----------------------------------------------------------------
@@ -115,7 +117,16 @@ async def test_app():
         from app.main import app
 
         with patch("app.main.asyncpg.create_pool", new_callable=AsyncMock) as mock_pool:
-            mock_pool.return_value = AsyncMock()
+            mock_pool_obj = MagicMock()
+            acquire_ctx = MagicMock()
+            acquire_ctx.__aenter__ = AsyncMock()
+            mock_conn = MagicMock()
+            mock_conn.fetchval = AsyncMock(return_value=1)
+            acquire_ctx.__aenter__.return_value = mock_conn
+            acquire_ctx.__aexit__ = AsyncMock()
+            mock_pool_obj.acquire.return_value = acquire_ctx
+            mock_pool_obj.close = AsyncMock()
+            mock_pool.return_value = mock_pool_obj
             async with app.router.lifespan_context(app):
                 yield app
     finally:
@@ -135,3 +146,38 @@ async def async_client(test_app) -> AsyncClient:
         base_url="http://test",
     ) as client:
         yield client
+
+from jose import jwt
+import time
+
+PRIVATE_PEM = """\
+-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQggosyvr8VSPb/UTdv
+DcYJONWOmcI73Woero+DzsLUIemhRANCAAQkTVAev2FwsLvIPUB14BrxKIOfCMCI
+Ma3A1Hwa5ZONwmP/zmVP7WRoRkUbCQKowh/6PXkwMXtdsWPxyTNt5rcc
+-----END PRIVATE KEY-----
+"""
+PUBLIC_JWK = {'alg': 'ES256', 'kty': 'EC', 'crv': 'P-256', 'x': 'JE1QHr9hcLC7yD1AdeAa8SiDnwjAiDGtwNR8GuWTjcI', 'y': 'Y__OZU_tZGhGRRsJAqjCH_o9eTAxe12xY_HJM23mtxw', 'kid': 'test-kid'}
+
+@pytest.fixture
+def auth_headers():
+    claims = {
+        "sub": "ff46e7d4-df9c-406f-be0c-987537a1b8a3",
+        "role": "authenticated",
+        "aud": "authenticated",
+        "iss": "https://ppwnixwhaxpsqvufdggy.supabase.co/auth/v1",
+        "exp": int(time.time()) + 3600
+    }
+    token = jwt.encode(claims, PRIVATE_PEM, algorithm="ES256", headers={"kid": "test-kid"})
+    return {"Authorization": f"Bearer {token}"}
+
+@pytest.fixture
+def test_user_id(auth_headers):
+    return "ff46e7d4-df9c-406f-be0c-987537a1b8a3"
+
+@pytest.fixture(autouse=True)
+def mock_jwks():
+    from unittest.mock import patch
+    dummy_jwks = {"keys": [PUBLIC_JWK]}
+    with patch("app.core.security.get_jwks", return_value=dummy_jwks):
+        yield

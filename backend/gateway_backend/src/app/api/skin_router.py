@@ -121,8 +121,9 @@ async def skin_predict(
 
         # Step 2: Upload image to Supabase Storage
         image_url: str = ""
+        storage_path: Optional[str] = None
         try:
-            image_url = await StorageService.upload_scan_image(
+            image_url, storage_path = await StorageService.upload_scan_image(
                 supabase_client=request.app.state.supabase_client,
                 bucket=gateway_config.supabase_storage_bucket,
                 user_id=final_user_id,
@@ -140,20 +141,25 @@ async def skin_predict(
         scan_status: int = ScanPersistenceService.derive_scan_status(confidence)
 
         # Step 4: Persist to scan_results
-        await ScanPersistenceService.insert_scan_result(
-            pool=db_pool,
-            scan_id=scan_id,
-            user_id=final_user_id,
-            doctor_id=final_doctor_id,
-            scan_type=_SCAN_TYPE_SKIN,
-            scan_status=scan_status,
-            image_url=image_url,
-            ai_diagnosis=str(ml_result.get("predicted_class", "")),
-            confidence=confidence,
-            findings=str(ml_result.get("findings", "")),
-            metadata=ml_result,
-            inference_source="cloud",
-        )
+        try:
+            await ScanPersistenceService.insert_scan_result(
+                pool=db_pool,
+                scan_id=scan_id,
+                user_id=final_user_id,
+                doctor_id=final_doctor_id,
+                scan_type=_SCAN_TYPE_SKIN,
+                scan_status=scan_status,
+                image_url=image_url,
+                ai_diagnosis=str(ml_result.get("predicted_class", "")),
+                confidence=confidence,
+                findings=str(ml_result.get("findings", "")),
+                metadata=ml_result,
+                inference_source="cloud",
+                storage_path=storage_path,
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).error("Failed to persist scan result: %s", exc)
 
         # Step 5: Augment response with persistence identifiers
         ml_result["scan_id"] = scan_id

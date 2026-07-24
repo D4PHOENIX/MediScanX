@@ -55,7 +55,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # sb_secret_* API keys.
     app.state.supabase_client = await create_async_client(
         gateway_config.supabase_url,
-        gateway_config.supabase_service_role_key,
+        gateway_config.supabase_secret_key,
     )
     logger.info("Supabase async client initialized.")
 
@@ -72,6 +72,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             statement_cache_size=0,
         )
         logger.info("asyncpg pool initialized (min_size=2, max_size=4).")
+        
+        # Verify required database migrations have been applied
+        async with app.state.db_pool.acquire() as conn:
+            try:
+                # We do a fast LIMIT 0 query that asks for the fields we know were recently added
+                await conn.fetch("SELECT inference_source, storage_path FROM scan_results LIMIT 0")
+                logger.info("Migration check passed: required columns present in scan_results.")
+            except asyncpg.exceptions.UndefinedColumnError as e:
+                logger.error("FATAL: Required database migrations are unapplied! Missing columns inference_source or storage_path in scan_results.")
+                await app.state.db_pool.close()
+                raise RuntimeError("Required database migrations are unapplied! Missing columns in scan_results.") from e
     else:
         app.state.db_pool = None
         logger.warning(

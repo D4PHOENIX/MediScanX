@@ -60,6 +60,7 @@ class ScanPersistenceService:
         doctor_id: Optional[str] = None,
         findings: str = "",
         metadata: Optional[Dict[str, Any]] = None,
+        storage_path: Optional[str] = None,
     ) -> bool:
         """Inserts a single scan result row into the ``scan_results`` table.
 
@@ -82,6 +83,7 @@ class ScanPersistenceService:
             findings: Free-text diagnostic findings from the ML engine; optional.
             metadata: The full JSON payload from the ML engine, stored verbatim
                 in the ``metadata`` JSONB column for auditability; optional.
+            storage_path: The deterministic object path within Supabase Storage; optional.
 
         Returns:
             bool: ``True`` if the row was inserted, ``False`` if it already existed
@@ -106,6 +108,7 @@ class ScanPersistenceService:
                 confidence,
                 metadata,
                 inference_source,
+                storage_path,
                 scan_date
             ) VALUES (
                 $1::uuid,
@@ -119,6 +122,7 @@ class ScanPersistenceService:
                 $9,
                 $10::jsonb,
                 $11,
+                $12,
                 timezone('utc'::text, now())
             )
             ON CONFLICT (scan_id) DO NOTHING
@@ -138,6 +142,7 @@ class ScanPersistenceService:
                 confidence,
                 metadata_json,
                 inference_source,
+                storage_path,
             )
 
         # asyncpg returns a string like "INSERT 0 1" or "INSERT 0 0"

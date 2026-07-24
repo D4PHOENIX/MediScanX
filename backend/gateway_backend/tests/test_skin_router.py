@@ -4,13 +4,12 @@ from httpx import Response, HTTPStatusError, Request as HttpxRequest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.core.security import get_current_user
 from app.core.config import gateway_config
 
 client = TestClient(app)
 
 @pytest.mark.asyncio
-async def test_skin_predict_valid_input():
+async def test_skin_predict_valid_input(auth_headers):
     """Test valid-input inference: it should return the expected response shape."""
     mock_client = AsyncMock()
     mock_response = MagicMock(spec=Response)
@@ -25,18 +24,17 @@ async def test_skin_predict_valid_input():
     
     app.state.http_client = mock_client
     app.state.db_pool = None
-
-    app.dependency_overrides[get_current_user] = lambda: "test_user_uuid"
     try:
         response = client.post(
-            "/api/v1/skin/predict",
+                "/api/v1/skin/predict", 
             files={"file": ("skin.jpg", b"fake_skin_data", "image/jpeg")},
             data={"top_k": 3},
-            headers={"Authorization": "Bearer fake_token"},
+                headers=auth_headers,
+                
+
         )
     finally:
-        app.dependency_overrides.pop(get_current_user, None)
-
+        pass
     assert mock_client.post.called
     assert response.status_code == 200
     assert response.json() == {
@@ -55,41 +53,41 @@ async def test_skin_predict_valid_input():
 
 
 @pytest.mark.asyncio
-async def test_skin_predict_missing_file():
+async def test_skin_predict_missing_file(auth_headers):
     """Test malformed/missing input: it should return the right 4xx status."""
-    app.dependency_overrides[get_current_user] = lambda: "test_user_uuid"
     try:
         response = client.post(
             "/api/v1/skin/predict",
             data={"top_k": 3},
-            headers={"Authorization": "Bearer fake_token"},
+                headers=auth_headers,
+                
+
         )
     finally:
-        app.dependency_overrides.pop(get_current_user, None)
-
+        pass
     assert response.status_code == 422
 
 
 @pytest.mark.asyncio
-async def test_skin_predict_too_large():
+async def test_skin_predict_too_large(auth_headers):
     """Test malformed/missing input: it should return the right 4xx status."""
     oversized = b"x" * (gateway_config.max_upload_bytes + 1)
-    app.dependency_overrides[get_current_user] = lambda: "test_user_uuid"
     try:
         response = client.post(
-            "/api/v1/skin/predict",
+                "/api/v1/skin/predict", 
             files={"file": ("huge.jpg", oversized, "image/jpeg")},
             data={"top_k": 1},
-            headers={"Authorization": "Bearer fake_token"},
+                headers=auth_headers,
+                
+
         )
     finally:
-        app.dependency_overrides.pop(get_current_user, None)
-
+        pass
     assert response.status_code == 413
 
 
 @pytest.mark.asyncio
-async def test_skin_predict_upstream_error():
+async def test_skin_predict_upstream_error(auth_headers):
     """Test that a raised inference error is handled."""
     mock_client = AsyncMock()
     
@@ -102,19 +100,18 @@ async def test_skin_predict_upstream_error():
         response=mock_response
     )
     
-    app.state.http_client = mock_client
-    app.dependency_overrides[get_current_user] = lambda: "test_user_uuid"
-    
+    app.state.http_client = mock_client    
     try:
         response = client.post(
-            "/api/v1/skin/predict",
+                "/api/v1/skin/predict", 
             files={"file": ("skin.jpg", b"fake", "image/jpeg")},
             data={"top_k": 3},
-            headers={"Authorization": "Bearer fake_token"},
+                headers=auth_headers,
+                
+
         )
     finally:
-        app.dependency_overrides.pop(get_current_user, None)
-
+        pass
     assert response.status_code == 503
     data = response.json()
     assert data.get("error") is True

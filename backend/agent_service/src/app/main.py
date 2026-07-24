@@ -55,7 +55,16 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
 
     pool = await asyncpg.create_pool(_asyncpg_dsn, min_size=2, max_size=10)
     application.state.db_pool = pool
-
+    
+    # Verify required database migrations have been applied
+    async with pool.acquire() as conn:
+        try:
+            await conn.fetch("SELECT inference_source, storage_path FROM scan_results LIMIT 0")
+            logger.info("Migration check passed: required columns present in scan_results.")
+        except asyncpg.exceptions.UndefinedColumnError as e:
+            logger.error("FATAL: Required database migrations are unapplied! Missing columns inference_source or storage_path in scan_results.")
+            await pool.close()
+            raise RuntimeError("Required database migrations are unapplied! Missing columns in scan_results.") from e
 
     try:
         async with build_graph(
@@ -73,7 +82,7 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
     finally:
         await pool.close()
 
-    # --- Shutdown ---
+    # Shutdown
     logger.info("Agent service stopped.")
 
 

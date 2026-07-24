@@ -10,7 +10,7 @@ from app.agent.tools.rag_tool import search_clinical_guidelines
 from app.core.embedding_contract import EMBEDDING_DIM
 
 @pytest.mark.asyncio
-async def test_rag_query_encoder_and_retrieval(monkeypatch):
+async def test_rag_query_encoder_and_retrieval(monkeypatch, auth_headers):
     # This test hits both the _embed wrapper and the retrieval logic
     # without a finding_label.
     
@@ -78,7 +78,7 @@ async def test_rag_query_encoder_and_retrieval(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_rag_finding_label_glossary_lookup(monkeypatch):
+async def test_rag_finding_label_glossary_lookup(monkeypatch, auth_headers):
     mock_pool = MagicMock()
     mock_conn = AsyncMock()
     ctx = AsyncMock()
@@ -122,7 +122,7 @@ async def test_rag_finding_label_glossary_lookup(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_rag_rerank_enabled():
+async def test_rag_rerank_enabled(auth_headers):
     mock_pool = MagicMock()
     mock_conn = AsyncMock()
     ctx = AsyncMock()

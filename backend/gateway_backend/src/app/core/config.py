@@ -19,8 +19,8 @@ class GatewayConfig(BaseSettings):
 
     Attributes:
         supabase_url: The primary endpoint URL for the Supabase backend.
-        supabase_anon_key: The anonymous public key for Supabase access.
-        supabase_service_role_key: The elevated service role key for administrative Supabase actions.
+        supabase_publishable_key: The anonymous public key for Supabase access.
+        supabase_secret_key: The elevated service role key for administrative Supabase actions.
         dev_mode: A boolean flag activating relaxed security constraints for local development.
         allowed_origins: An explicit list of permitted Cross-Origin Resource Sharing (CORS) origins.
         max_upload_bytes: The maximum permitted size for multipart file uploads, measured in bytes.
@@ -31,8 +31,8 @@ class GatewayConfig(BaseSettings):
     """
 
     supabase_url: str
-    supabase_anon_key: str
-    supabase_service_role_key: str
+    supabase_publishable_key: str
+    supabase_secret_key: str
     dev_mode: bool = False
     dev_token_secret: str
     database_url: str | None = None

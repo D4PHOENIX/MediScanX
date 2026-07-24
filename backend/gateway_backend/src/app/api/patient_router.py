@@ -16,7 +16,7 @@ from app.core.security import get_current_user
 router: APIRouter = APIRouter(tags=["patients", "doctors"])
 
 SUPABASE_URL: str = gateway_config.supabase_url
-SUPABASE_ANON_KEY: str = gateway_config.supabase_anon_key
+SUPABASE_PUBLISHABLE_KEY: str = gateway_config.supabase_publishable_key
 
 
 async def get_token(request: Request) -> str:
@@ -64,7 +64,7 @@ async def get_patient(
     """
     url: str = f"{SUPABASE_URL}/rest/v1/patient_records"
     headers: Dict[str, str] = {
-        "apikey": SUPABASE_ANON_KEY,
+        "apikey": SUPABASE_PUBLISHABLE_KEY,
         "Authorization": f"Bearer {token}",
     }
     params: Dict[str, str] = {"id": f"eq.{patient_id}", "select": "*"}
@@ -112,7 +112,7 @@ async def get_patient_scans(
     """
     url: str = f"{SUPABASE_URL}/rest/v1/scan_results"
     headers: Dict[str, str] = {
-        "apikey": SUPABASE_ANON_KEY,
+        "apikey": SUPABASE_PUBLISHABLE_KEY,
         "Authorization": f"Bearer {token}",
     }
     params: Dict[str, Union[str, int]] = {
@@ -162,7 +162,7 @@ async def get_doctor(
     """
     url: str = f"{SUPABASE_URL}/rest/v1/doctor_profiles"
     headers: Dict[str, str] = {
-        "apikey": SUPABASE_ANON_KEY,
+        "apikey": SUPABASE_PUBLISHABLE_KEY,
         "Authorization": f"Bearer {token}",
     }
     params: Dict[str, str] = {"id": f"eq.{doctor_id}", "select": "*"}

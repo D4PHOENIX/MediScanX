@@ -67,8 +67,8 @@ class StorageService:
         scan_id: str,
         file_bytes: bytes,
         content_type: Optional[str] = None,
-    ) -> str:
-        """Uploads a scan image to Supabase Storage and returns its public URL.
+    ) -> tuple[str, str]:
+        """Uploads a scan image to Supabase Storage and returns its public URL and object path.
 
         Uses the ``supabase-py`` async SDK which internally handles auth
         token translation, supporting both legacy JWT keys and the newer
@@ -83,7 +83,7 @@ class StorageService:
             content_type: MIME type of the image; defaults to ``"image/png"``.
 
         Returns:
-            str: The public HTTPS URL of the stored object.
+            tuple[str, str]: The public HTTPS URL of the stored object and the internal object path.
 
         Raises:
             RuntimeError: If the Supabase Storage upload fails.
@@ -124,5 +124,5 @@ class StorageService:
         # Construct the public URL for the stored object.
         # Since the bucket is public, the Flutter client can fetch directly via HTTPS.
         public_url: str = await storage_bucket.get_public_url(object_path)
-        logger.info("Scan image stored at %s", public_url)
-        return public_url
+        logger.info("Scan image stored at %s with path %s", public_url, object_path)
+        return public_url, object_path
