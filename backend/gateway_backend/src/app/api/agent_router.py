@@ -48,38 +48,53 @@ async def chat_with_agent(
     if body.get("current_scan_id") == "":
         body["current_scan_id"] = None
 
-    async def event_stream() -> AsyncGenerator[bytes, None]:
-        async with httpx.AsyncClient() as client:
-            try:
-                async with client.stream(
-                    "POST",
-                    _TARGET_URL,
-                    json=body,
-                    headers={
-                        "Accept": "text/event-stream",
-                        "Cache-Control": "no-cache",
-                        "Authorization": request.headers.get("Authorization", ""),
-                    },
-                    timeout=120.0,
-                ) as response:
-                    if response.status_code >= 400:
-                        error_body = await response.aread()
-                        logger.error(
-                            "Agent service returned %d: %s",
-                            response.status_code,
-                            error_body.decode("utf-8", errors="replace")[:512],
-                        )
-                        yield f'event: error\ndata: {{"error": true, "message": "Agent service returned HTTP {response.status_code}"}}\n\n'.encode("utf-8")
-                        return
+    client: httpx.AsyncClient = request.app.state.http_client
+    
+    try:
+        req = client.build_request(
+            "POST",
+            _TARGET_URL,
+            json=body,
+            headers={
+                "Accept": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Authorization": request.headers.get("Authorization", ""),
+            },
+            timeout=httpx.Timeout(300.0, connect=10.0)
+        )
+        response = await client.send(req, stream=True)
+    except httpx.RequestError as exc:
+        logger.error("Proxy streaming connect error: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Upstream service is unreachable."
+        ) from exc
 
-                    async for chunk in response.aiter_bytes():
-                        if chunk:
-                            yield chunk
-                        else:
-                            yield b": keepalive\n\n"
-            except Exception as exc:
-                logger.error("Proxy streaming error: %s", exc)
-                yield f'event: error\ndata: {{"error": true, "message": "Upstream connection failed: {str(exc)}"}}\n\n'.encode("utf-8")
+    if response.status_code >= 400:
+        error_body = await response.aread()
+        await response.aclose()
+        logger.error(
+            "Agent service returned %d: %s",
+            response.status_code,
+            error_body.decode("utf-8", errors="replace")[:512],
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Upstream service returned error: {response.status_code}"
+        )
+
+    async def event_stream() -> AsyncGenerator[bytes, None]:
+        try:
+            async for chunk in response.aiter_bytes():
+                if chunk:
+                    yield chunk
+                else:
+                    yield b": keepalive\n\n"
+        except Exception as exc:
+            logger.error("Proxy streaming read error: %s", exc)
+            yield f'event: error\ndata: {{"error": true, "type": "UpstreamServiceError", "message": "Upstream connection failed: {str(exc)}", "context": {{"service": "agent"}}}}\n\n'.encode("utf-8")
+        finally:
+            await response.aclose()
 
     return StreamingResponse(
         event_stream(),
