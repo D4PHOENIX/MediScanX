@@ -6,8 +6,8 @@ def test_database_url_pooler_accepted():
     # Valid pooler URL
     config = GatewayConfig(
         supabase_url="http://test",
-        supabase_anon_key="test",
-        supabase_service_role_key="test",
+        supabase_publishable_key="test",
+        supabase_secret_key="test",
         dev_token_secret="test",
         supabase_storage_bucket="test",
         allowed_origins="http://localhost",
@@ -25,8 +25,8 @@ def test_database_url_pooler_rejected_bare_host():
     with pytest.raises(ValidationError) as exc:
         GatewayConfig(
             supabase_url="http://test",
-            supabase_anon_key="test",
-            supabase_service_role_key="test",
+            supabase_publishable_key="test",
+            supabase_secret_key="test",
             dev_token_secret="test",
             supabase_storage_bucket="test",
             allowed_origins="http://localhost",
@@ -44,8 +44,8 @@ def test_database_url_pooler_rejected_wrong_port():
     with pytest.raises(ValidationError) as exc:
         GatewayConfig(
             supabase_url="http://test",
-            supabase_anon_key="test",
-            supabase_service_role_key="test",
+            supabase_publishable_key="test",
+            supabase_secret_key="test",
             dev_token_secret="test",
             supabase_storage_bucket="test",
             allowed_origins="http://localhost",
