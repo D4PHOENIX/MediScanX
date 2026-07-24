@@ -65,7 +65,7 @@ jobs:
             # DATABASE_URL uses a mock .pooler.supabase.com host to pass AgentConfig strict initialization validation
             DATABASE_URL: ${{ secrets.DATABASE_URL || 'postgresql://ci_user:ci_pass@aws-0-eu-central-1.pooler.supabase.com:5432/ci_db' }}
             SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'http://mock-supabase' }}
-            SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || 'mock-service-role-key' }}
+            SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY || 'mock-service-role-key' }}
             CXR_SERVICE_URL: "http://mock-cxr:8001/predict"
             ECG_SERVICE_URL: "http://mock-ecg:8002/predict"
             SKIN_SERVICE_URL: "http://mock-skin:8003/predict"
@@ -178,6 +178,6 @@ jobs:
                     -e GEMINI_API_KEY=ci-dummy \
                     -e DATABASE_URL=postgresql://ci:ci@localhost/ci \
                     -e SUPABASE_URL=http://localhost \
-                    -e SUPABASE_SERVICE_ROLE_KEY=ci-dummy \
+                    -e SUPABASE_SECRET_KEY=ci-dummy \
                     ${{ env.IMAGE_NAME }}:pr-${{ github.event.pull_request.number }} \
                     python -c "import sys; sys.path.insert(0, '/app/src'); from app.core.config import AgentConfig; import app.main; print('Import OK')"

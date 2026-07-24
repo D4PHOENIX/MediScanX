@@ -17,7 +17,6 @@
 # ----------------------------------
 # GatewayConfig has four required fields with no defaults.  They are
 # injected as GitHub Actions `env:` vars so pydantic-settings can resolve
-# them.  Real secrets (SUPABASE_JWT_SECRET etc.) are stored in GitHub
 # Secrets and must be configured in the repository settings.
 # =============================================================================
 
@@ -57,14 +56,12 @@ jobs:
             # GatewayConfig mandatory fields — all four must be present or the
             # pydantic-settings ValidationError aborts test collection.
             #
-            # SUPABASE_JWT_SECRET must be long enough for HMAC-SHA256 (≥ 32 chars).
             # Store the real secret in GitHub Secrets; the mock value here is only
             # used to validate the JWT rejection / acceptance logic with fake tokens.
             # -----------------------------------------------------------------------
             SUPABASE_URL: "http://mock-supabase"
-            SUPABASE_ANON_KEY: "mock-anon-key"
-            SUPABASE_SERVICE_ROLE_KEY: "mock-service-role-key"
-            SUPABASE_JWT_SECRET: "dummy_jwt_secret_for_ci_testing_only_at_least_32_chars"
+            SUPABASE_PUBLISHABLE_KEY: "mock-anon-key"
+            SUPABASE_SECRET_KEY: "mock-service-role-key"
 
             # Internal microservice URLs (unreachable in CI — all proxied calls are
             # mocked via httpx patch in the test suite)
@@ -133,8 +130,8 @@ jobs:
             - name: Run pytest
               env:
                   SUPABASE_URL: "http://mock-supabase"
-                  SUPABASE_ANON_KEY: "mock-anon-key"
-                  SUPABASE_SERVICE_ROLE_KEY: "mock-service-role-key"
+                  SUPABASE_PUBLISHABLE_KEY: "mock-anon-key"
+                  SUPABASE_SECRET_KEY: "mock-service-role-key"
                   ALLOWED_ORIGINS: "https://test-origin.example.com"
                   CXR_SERVICE_URL: "http://cxr-mock"
                   ECG_SERVICE_URL: "http://ecg-mock"
@@ -202,8 +199,8 @@ jobs:
               run: |
                   docker run --rm \
                     -e SUPABASE_URL=http://mock-supabase \
-                    -e SUPABASE_ANON_KEY=mock-anon-key \
-                    -e SUPABASE_SERVICE_ROLE_KEY=mock-service-role-key \
+                    -e SUPABASE_PUBLISHABLE_KEY=mock-anon-key \
+                    -e SUPABASE_SECRET_KEY=mock-service-role-key \
                     -e CXR_SERVICE_URL=http://cxr-mock \
                     -e ECG_SERVICE_URL=http://ecg-mock \
                     -e SKIN_SERVICE_URL=http://skin-mock \
