@@ -1,7 +1,7 @@
 import pytest
 
 @pytest.mark.asyncio
-async def test_fuse_multimodal_findings_critical_alert() -> None:
+async def test_fuse_multimodal_findings_critical_alert(auth_headers) -> None:
     """Verify that a high ECG confidence triggers the critical alert.
 
     Math verification (normalized scoring):
@@ -30,7 +30,7 @@ async def test_fuse_multimodal_findings_critical_alert() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fuse_multimodal_findings_no_alert() -> None:
+async def test_fuse_multimodal_findings_no_alert(auth_headers) -> None:
     """Verify that a low-confidence skin finding does not trigger a critical alert."""
     from app.agent.tools.fusion import fuse_multimodal_findings
 
@@ -49,7 +49,7 @@ async def test_fuse_multimodal_findings_no_alert() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fuse_multimodal_findings_multi_modality() -> None:
+async def test_fuse_multimodal_findings_multi_modality(auth_headers) -> None:
     """Verify normalized risk score across multiple modalities.
 
     Math verification:
@@ -82,7 +82,7 @@ async def test_fuse_multimodal_findings_multi_modality() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fuse_multimodal_findings_all_modalities_bounded() -> None:
+async def test_fuse_multimodal_findings_all_modalities_bounded(auth_headers) -> None:
     """Verify risk score is bounded to [0.0, 1.0] when all modalities contribute.
 
     Even with high confidence across all modalities, normalization keeps
