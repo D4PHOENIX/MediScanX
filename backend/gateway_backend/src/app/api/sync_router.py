@@ -73,9 +73,9 @@ async def sync_edge_inference(
         ...,
         description="Client-generated UUID.  Becomes the PK in scan_results.",
     ),
-    user_id: str = Form(
-        ...,
-        description="The patient's UUID.  Must match the authenticated JWT sub.",
+    patient_id: Optional[str] = Form(
+        None,
+        description="The patient's UUID. If provided, must match the authenticated JWT sub until RBAC is implemented.",
     ),
     scan_type: int = Form(
         ...,
@@ -96,10 +96,6 @@ async def sync_edge_inference(
         le=1.0,
     ),
     # Optional supplementary fields
-    doctor_id: Optional[str] = Form(
-        None,
-        description="The doctor's UUID if the scan was captured during a session.",
-    ),
     findings: str = Form(
         "",
         description="Free-text diagnostic findings from the TFLite output.",
@@ -150,28 +146,22 @@ async def sync_edge_inference(
     #
     # 1. Input validation
     #
-    _validate_uuid(scan_id, "scan_id")
-    _validate_uuid(user_id, "user_id")
-
-    if doctor_id:
-        _validate_uuid(doctor_id, "doctor_id")
-
-    # Security: the user_id in the form body must match the authenticated JWT sub.
-    # This prevents a doctor from writing a scan attributed to a different patient
-    # by simply changing the user_id field.
-    if user_id != auth_user_id:
-        logger.warning(
-            "Edge sync user_id mismatch: form user_id=%s, JWT sub=%s",
-            user_id,
-            auth_user_id,
-        )
+    form_data = await request.form()
+    if "user_id" in form_data or "doctor_id" in form_data:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                "user_id in the request body does not match the authenticated identity. "
-                "You may only sync scans attributed to your own user account."
-            ),
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Client-supplied user_id and doctor_id form fields are rejected. Use patient_id for subject reference.",
         )
+
+    _validate_uuid(scan_id, "scan_id")
+
+    from app.utils.attribution_utils import resolve_attribution
+    final_user_id, final_doctor_id, _is_valid_uuid = resolve_attribution(
+        user_id=auth_user_id,
+        patient_id=patient_id,
+        doctor_id=None,
+        service_name="Sync"
+    )
 
     if scan_type not in _VALID_SCAN_TYPES:
         raise HTTPException(
@@ -232,10 +222,10 @@ async def sync_edge_inference(
     image_url: str = ""
 
     try:
-        image_url = await StorageService.upload_scan_image(
+        image_url, storage_path = await StorageService.upload_scan_image(
             supabase_client=request.app.state.supabase_client,
             bucket=gateway_config.supabase_storage_bucket,
-            user_id=user_id,
+            user_id=final_user_id,
             scan_id=scan_id,
             file_bytes=content,
             content_type=file.content_type,
@@ -248,6 +238,7 @@ async def sync_edge_inference(
             scan_id,
             exc,
         )
+        storage_path = None
 
     #
     # 5. Insert into scan_results (idempotent)
@@ -255,8 +246,8 @@ async def sync_edge_inference(
     was_inserted: bool = await ScanPersistenceService.insert_scan_result(
         pool=db_pool,
         scan_id=scan_id,
-        user_id=user_id,
-        doctor_id=doctor_id,
+        user_id=final_user_id,
+        doctor_id=final_doctor_id,
         scan_type=scan_type,
         scan_status=scan_status,
         image_url=image_url,
@@ -265,6 +256,7 @@ async def sync_edge_inference(
         findings=findings,
         metadata=metadata_dict,
         inference_source="edge",
+        storage_path=storage_path,
     )
 
     #
