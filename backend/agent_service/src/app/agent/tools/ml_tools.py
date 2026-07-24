@@ -1,21 +1,23 @@
 """Multi-modal inference tools for CXR, ECG, and Skin services.
 
 Each tool delegates to a downstream FastAPI microservice via HTTP POST.
-File payloads are constructed from a local path or identifier and sent
-as multipart form data.  All network and I/O errors are caught and
-returned as descriptive dictionaries so the LLM can explain the failure
-to the user without crashing the graph.
+File payloads are securely fetched from Supabase Storage using the deterministic
+storage_path derived from scan_results, ensuring no arbitrary file access is allowed.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import os
+import uuid
 from typing import Any, Dict, Tuple
 
+import asyncpg
 import httpx
 from langchain_core.tools import tool
+from langchain_core.runnables import RunnableConfig
+from supabase._async.client import AsyncClient as SupabaseAsyncClient
+from supabase._async.client import create_client
 
 logger = logging.getLogger(__name__)
 
@@ -26,54 +28,85 @@ def _get_config() -> 'AgentConfig':
     return AgentConfig()
 
 
-async def _build_file_payload(file_path_or_id: str) -> Tuple[str, bytes]:
-    """Prepare a file payload for an upstream service.
-
-    Reads the file in a thread pool to avoid blocking the async event loop.
+async def _get_storage_path_and_fetch(scan_id: uuid.UUID, auth_user_id: str) -> bytes:
+    """Validate ownership and fetch file bytes from Supabase Storage.
 
     Args:
-        file_path_or_id (str): Absolute path to a local file or an internal
-            scan identifier.
+        scan_id (uuid.UUID): The internal scan identifier.
+        auth_user_id (str): The injected authenticated user ID.
 
     Returns:
-        Tuple[str, bytes]: A tuple containing the filename and file content bytes.
+        bytes: The file content bytes.
 
     Raises:
-        FileNotFoundError: If the file does not exist.
-        OSError: If the file cannot be read.
+        ValueError: If ownership validation fails or file is not found.
     """
-    filename = os.path.basename(file_path_or_id)
+    config = _get_config()
+    db_url = config.database_url
+    if not db_url:
+        raise ValueError("DATABASE_URL is not configured.")
 
-    def _read() -> bytes:
-        with open(file_path_or_id, "rb") as fh:
-            return fh.read()
+    storage_path = None
+    try:
+        conn = await asyncpg.connect(db_url)
+        try:
+            row = await conn.fetchrow(
+                "SELECT storage_path FROM scan_results WHERE scan_id = $1 AND user_id = $2",
+                scan_id, uuid.UUID(auth_user_id)
+            )
+            if row:
+                storage_path = row["storage_path"]
+        finally:
+            await conn.close()
+    except Exception as exc:
+        logger.error("Database query failed for scan_id=%s: %s", scan_id, exc)
+        raise ValueError("Failed to validate scan ownership.") from exc
 
-    content = await asyncio.to_thread(_read)
-    return filename, content
+    if not storage_path:
+        logger.warning("Scan ownership validation failed for scan_id=%s user_id=%s", scan_id, auth_user_id)
+        raise ValueError("Scan not found or access denied.")
+
+    supabase_url = config.supabase_url
+    supabase_key = config.supabase_secret_key
+
+    if not supabase_url or not supabase_key:
+        raise ValueError("Supabase credentials not configured.")
+
+    try:
+        supabase: SupabaseAsyncClient = await create_client(supabase_url, supabase_key)
+        # Fetch file from storage
+        res = await supabase.storage.from_("scan-images").download(storage_path)
+        return res
+    except Exception as exc:
+        logger.error("Failed to download file from Supabase: %s", exc)
+        raise ValueError("Failed to retrieve file content.") from exc
 
 
-async def _post_to_service(url: str, file_path_or_id: str) -> Dict[str, Any]:
+async def _post_to_service(url: str, scan_id: uuid.UUID, auth_user_id: str) -> Dict[str, Any]:
     """Post a file to an inference service and return the JSON response.
-
-    All errors are caught and returned as structured dictionaries so the
-    LLM receives a clean error message rather than an unhandled exception
-    crashing the SSE stream.
 
     Args:
         url (str): The full URL of the downstream inference endpoint.
-        file_path_or_id (str): Path to the file or scan identifier to send.
+        scan_id (uuid.UUID): The scan identifier to send.
+        auth_user_id (str): The injected authenticated user ID.
 
     Returns:
         Dict[str, Any]: The JSON response from the service, or an error dictionary.
     """
     try:
-        filename, content = await _build_file_payload(file_path_or_id)
-        files_payload = {"file": (filename, content, "application/octet-stream")}
-    except (FileNotFoundError, OSError) as exc:
-        logger.warning("Could not read file '%s': %s", file_path_or_id, exc)
+        content = await _get_storage_path_and_fetch(scan_id, auth_user_id)
+        # We use a dummy filename since the downstream service doesn't rely on it for processing
+        files_payload = {"file": (f"{scan_id}.bin", content, "application/octet-stream")}
+    except ValueError as exc:
         return {
-            "error": "File not found",
-            "details": f"Could not read '{file_path_or_id}': {exc}",
+            "error": "Validation error",
+            "details": str(exc),
+        }
+    except Exception as exc:
+        logger.warning("Could not fetch file for scan '%s': %s", scan_id, exc)
+        return {
+            "error": "File fetch error",
+            "details": f"Could not fetch scan '{scan_id}': {exc}",
         }
 
     try:
@@ -96,55 +129,51 @@ async def _post_to_service(url: str, file_path_or_id: str) -> Dict[str, Any]:
 
 
 @tool
-async def run_cxr_inference(image_path_or_id: str) -> Dict[str, Any]:
+async def run_cxr_inference(scan_id: uuid.UUID, config: RunnableConfig) -> Dict[str, Any]:
     """Execute chest X-ray inference using the downstream CXR service.
 
-    Sends the image to the CXR microservice which runs a DenseNet-121
-    forward pass with Grad-CAM heatmap generation and multi-label
-    thresholding.
-
     Args:
-        image_path_or_id (str): Path to a DICOM/PNG/JPG image file or an
-            internal scan identifier.
+        scan_id (str): Internal scan identifier (UUID).
+        config (RunnableConfig): Injected LangGraph config containing the auth_user_id.
 
     Returns:
-        Dict[str, Any]: A dictionary containing the prediction results (diagnosis,
-        confidence scores, heatmap), or an error dictionary.
+        Dict[str, Any]: A dictionary containing the prediction results, or an error dictionary.
     """
-    return await _post_to_service(_get_config().cxr_service_url, image_path_or_id)
+    auth_user_id = config.get("configurable", {}).get("auth_user_id")
+    if not auth_user_id:
+        return {"error": "Authentication error", "details": "auth_user_id not found in context."}
+    return await _post_to_service(_get_config().cxr_service_url, scan_id, auth_user_id)
 
 
 @tool
-async def run_ecg_inference(file_path_or_id: str) -> Dict[str, Any]:
+async def run_ecg_inference(scan_id: uuid.UUID, config: RunnableConfig) -> Dict[str, Any]:
     """Execute ECG inference using the downstream ECG service.
 
-    Sends the ECG recording to the ECG microservice which runs a
-    CNN-BiLSTM forward pass for arrhythmia classification.
-
     Args:
-        file_path_or_id (str): Path to a WFDB record directory (or single file)
-            or an internal scan identifier.
+        scan_id (str): Internal scan identifier (UUID).
+        config (RunnableConfig): Injected LangGraph config containing the auth_user_id.
 
     Returns:
-        Dict[str, Any]: A dictionary containing the prediction results, or an error
-        dictionary.
+        Dict[str, Any]: A dictionary containing the prediction results, or an error dictionary.
     """
-    return await _post_to_service(_get_config().ecg_service_url, file_path_or_id)
+    auth_user_id = config.get("configurable", {}).get("auth_user_id")
+    if not auth_user_id:
+        return {"error": "Authentication error", "details": "auth_user_id not found in context."}
+    return await _post_to_service(_get_config().ecg_service_url, scan_id, auth_user_id)
 
 
 @tool
-async def run_skin_inference(image_path_or_id: str) -> Dict[str, Any]:
+async def run_skin_inference(scan_id: uuid.UUID, config: RunnableConfig) -> Dict[str, Any]:
     """Execute skin-lesion inference using the downstream Skin service.
 
-    Sends the dermoscopic image to the Skin microservice which runs a
-    MedLiteNet/MobileNet forward pass for lesion classification.
-
     Args:
-        image_path_or_id (str): Path to a dermoscopic image file or an internal
-            scan identifier.
+        scan_id (str): Internal scan identifier (UUID).
+        config (RunnableConfig): Injected LangGraph config containing the auth_user_id.
 
     Returns:
-        Dict[str, Any]: A dictionary containing the prediction results, or an error
-        dictionary.
+        Dict[str, Any]: A dictionary containing the prediction results, or an error dictionary.
     """
-    return await _post_to_service(_get_config().skin_service_url, image_path_or_id)
+    auth_user_id = config.get("configurable", {}).get("auth_user_id")
+    if not auth_user_id:
+        return {"error": "Authentication error", "details": "auth_user_id not found in context."}
+    return await _post_to_service(_get_config().skin_service_url, scan_id, auth_user_id)

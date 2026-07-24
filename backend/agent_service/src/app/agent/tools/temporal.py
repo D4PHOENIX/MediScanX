@@ -27,6 +27,71 @@ def _get_config() -> 'AgentConfig':
     return AgentConfig()
 
 
+from app.models.schemas import ListRecentScansSchema
+import json
+
+@tool(args_schema=ListRecentScansSchema)
+async def list_recent_scans(limit: int, config: RunnableConfig) -> str:
+    """Retrieve the most recent scans belonging to the current user (patient).
+
+    Args:
+        limit (int): Maximum number of recent scans to return.
+        config (RunnableConfig): Injected LangGraph config containing auth_user_id and db_pool.
+
+    Returns:
+        str: A JSON-encoded string containing a list of recent scans, or an error message.
+    """
+    auth_user_id = config.get("configurable", {}).get("auth_user_id")
+    if not auth_user_id:
+        return "Authentication error: auth_user_id not found in context."
+
+    db_pool = config.get("configurable", {}).get("db_pool")
+    
+    query = """
+        SELECT scan_id, scan_type, scan_status, scan_date, ai_diagnosis, confidence
+        FROM scan_results
+        WHERE user_id = $1
+        ORDER BY scan_date DESC
+        LIMIT $2
+    """
+
+    async def _fetch(conn: asyncpg.Connection) -> str:
+        try:
+            import uuid
+            rows = await conn.fetch(query, uuid.UUID(auth_user_id), limit)
+            if not rows:
+                return "No recent scans found."
+            
+            scans = []
+            for row in rows:
+                scans.append({
+                    "scan_id": str(row["scan_id"]),
+                    "scan_type": row["scan_type"],
+                    "scan_status": row["scan_status"],
+                    "scan_date": row["scan_date"].isoformat() if row["scan_date"] else None,
+                    "ai_diagnosis": row["ai_diagnosis"],
+                    "confidence": float(row["confidence"]) if row["confidence"] is not None else None,
+                })
+            return json.dumps(scans, indent=2)
+        except Exception as exc:
+            logger.exception("Failed to query recent scans: %s", exc)
+            return f"Database error: {exc}"
+
+    if db_pool is not None:
+        async with db_pool.acquire() as conn:
+            return await _fetch(conn)
+    else:
+        dsn = _get_config().database_url
+        if not dsn:
+            return "DATABASE_URL environment variable not set."
+        conn = await asyncpg.connect(dsn)
+        try:
+            return await _fetch(conn)
+        finally:
+            await conn.close()
+
+
+
 _EMBED_DIM = 256
 _SIGNIFICANT_THRESHOLD = 0.5
 
@@ -42,6 +107,7 @@ async def _temporal_progression_impl(
 
     Args:
         conn: Active asyncpg connection.
+        auth_user_id: The ID of the authenticated user to enforce tenant isolation.
         current_scan_id: Identifier of the scan to be assessed.
         previous_scan_id: Identifier of a specific previous scan (optional).
 
@@ -49,14 +115,14 @@ async def _temporal_progression_impl(
         Dict[str, Any]: Dictionary containing ``l2_distance``, ``interpretation``,
         and ``is_significant`` flag.
     """
-    # --- Fetch current scan -------------------------------------------------
+    # Fetch current scan
     current = await conn.fetchrow(
         """
         SELECT embedding, modality, primary_condition, patient_id
         FROM patient_scans
-        WHERE id = $1
+        WHERE id = $1 AND patient_id = $2
         """,
-        current_scan_id,
+        current_scan_id, auth_user_id
     )
     if current is None:
         return {
@@ -79,10 +145,10 @@ async def _temporal_progression_impl(
     condition = current["primary_condition"]
     patient_id = current["patient_id"]
 
-    # --- Retrieve previous vector -------------------------------------------
+    # Retrieve previous vector
     if previous_scan_id is not None:
         prev_row = await conn.fetchrow(
-            "SELECT embedding FROM patient_scans WHERE id = $1", previous_scan_id
+            "SELECT embedding, patient_id FROM patient_scans WHERE id = $1 AND patient_id = $2", previous_scan_id, auth_user_id
         )
         if prev_row is None:
             return {
@@ -129,7 +195,7 @@ async def _temporal_progression_impl(
             "is_significant": None,
         }
 
-    # --- Compute L2 distance ------------------------------------------------
+    # Compute L2 distance
     distance = math.dist(current_vector, prev_vector)
     significant = distance > _SIGNIFICANT_THRESHOLD
     interpretation = (
@@ -172,11 +238,19 @@ async def calculate_temporal_progression(
         ``is_significant`` are ``None`` with a descriptive
         ``interpretation``.
     """
+    auth_user_id = config.get("configurable", {}).get("auth_user_id")
+    if not auth_user_id:
+        return {
+            "l2_distance": None,
+            "interpretation": "Authentication error: auth_user_id not found in context.",
+            "is_significant": None,
+        }
+
     db_pool = config.get("configurable", {}).get("db_pool") if config else None
     if db_pool is not None:
         try:
             async with db_pool.acquire() as conn:
-                return await _temporal_progression_impl(conn, current_scan_id, previous_scan_id)
+                return await _temporal_progression_impl(conn, auth_user_id, current_scan_id, previous_scan_id)
         except Exception as exc:
             logger.exception("Temporal progression computation failed: %s", exc)
             return {
@@ -196,7 +270,7 @@ async def calculate_temporal_progression(
         conn: Optional[asyncpg.Connection] = None
         try:
             conn = await asyncpg.connect(dsn)
-            return await _temporal_progression_impl(conn, current_scan_id, previous_scan_id)
+            return await _temporal_progression_impl(conn, auth_user_id, current_scan_id, previous_scan_id)
         except Exception as exc:
             logger.exception("Temporal progression computation failed: %s", exc)
             return {
@@ -211,7 +285,6 @@ async def calculate_temporal_progression(
 
 @tool(args_schema=QueryPatientMetricsSchema)
 async def query_patient_metrics(
-    patient_id: str,
     config: RunnableConfig,
 ) -> str:
     """Retrieve tabular metrics (e.g. age, heart rate, blood pressure) for a patient.
@@ -220,20 +293,24 @@ async def query_patient_metrics(
     or contains no rows, falls back to the ``patients`` table.
 
     Args:
-        patient_id (str): The unique identifier of the patient to query.
         config (RunnableConfig): Injected LangGraph config containing the db_pool.
 
     Returns:
         str: A newline-separated string of key-value metric pairs, or a
         descriptive error/not-found message.
     """
+    auth_user_id = config.get("configurable", {}).get("auth_user_id")
+    if not auth_user_id:
+        return "Authentication error: auth_user_id not found in context."
+    patient_id = auth_user_id
 
     async def _query_metrics(conn: asyncpg.Connection) -> str:
+        import uuid
         # Try patient_metrics first
         try:
             row = await conn.fetchrow(
                 "SELECT * FROM patient_metrics WHERE patient_id = $1 ORDER BY created_at DESC LIMIT 1",
-                patient_id,
+                uuid.UUID(patient_id),
             )
             if row:
                 metrics: List[str] = []
@@ -248,7 +325,7 @@ async def query_patient_metrics(
         # Fallback to patients table
         try:
             row = await conn.fetchrow(
-                "SELECT * FROM patients WHERE id = $1", patient_id
+                "SELECT * FROM patients WHERE id = $1", uuid.UUID(patient_id)
             )
             if row:
                 metrics = []
