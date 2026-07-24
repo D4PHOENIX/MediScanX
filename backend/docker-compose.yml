@@ -45,8 +45,6 @@ services:
         dns:
             - 8.8.8.8
             - 1.1.1.1
-        ports:
-            - "127.0.0.1:8005:8005"
         depends_on:
             - cxr_service
             - ecg_service
