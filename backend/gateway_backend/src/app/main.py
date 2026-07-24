@@ -47,6 +47,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     logger.info("Gateway backend starting up ...")
 
+    # Guard: Validate SUPABASE_URL is present and well-formed
+    from urllib.parse import urlparse
+    if not gateway_config.supabase_url or not gateway_config.supabase_url.strip():
+        logger.error("FATAL: SUPABASE_URL is missing or empty.")
+        raise RuntimeError("SUPABASE_URL is missing or empty.")
+    parsed_url = urlparse(gateway_config.supabase_url)
+    if not parsed_url.scheme or not parsed_url.netloc or not parsed_url.scheme.startswith("http"):
+        logger.error("FATAL: SUPABASE_URL must be a valid http/https URL.")
+        raise RuntimeError("SUPABASE_URL must be a valid http/https URL.")
+
     # Shared async HTTP client for downstream ML-service proxying.
     app.state.http_client = httpx.AsyncClient()
 

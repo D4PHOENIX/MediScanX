@@ -45,11 +45,15 @@ class AgentConfig:
     database_url: Optional[str] = field(default_factory=lambda: os.getenv("DATABASE_URL", None))
     supabase_url: Optional[str] = field(default_factory=lambda: os.getenv("SUPABASE_URL", None))
     supabase_secret_key: Optional[str] = field(default_factory=lambda: os.getenv("SUPABASE_SECRET_KEY", None))
-    supabase_jwks_url: Optional[str] = field(default_factory=lambda: os.getenv("SUPABASE_JWKS_URL", None))
 
     # Dev/Auth settings
     dev_mode: bool = field(default_factory=lambda: os.getenv("DEV_MODE", "False").lower() in ("true", "1", "t"))
     dev_token_secret: Optional[str] = field(default_factory=lambda: os.getenv("DEV_TOKEN_SECRET", None))
+
+    @property
+    def supabase_jwks_url(self) -> str:
+        """Constructs the URL for retrieving the JSON Web Key Set (JWKS)."""
+        return f"{self.supabase_url}/auth/v1/.well-known/jwks.json"
 
     def __post_init__(self):
         """Validates configuration after initialization."""
