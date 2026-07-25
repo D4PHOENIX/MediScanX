@@ -100,7 +100,18 @@ async def ecg_predict(
             timeout=Timeout(30.0),
         )
         resp.raise_for_status()
-    except (RequestError, HTTPStatusError) as exc:
+    except HTTPStatusError as exc:
+        if exc.response.status_code == 422:
+            try:
+                detail = exc.response.json()
+            except Exception:
+                detail = {"error": "unknown_error", "message": exc.response.text}
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=422, content=detail)
+        raise ServiceUnavailableError(
+            context={"service": "ecg", "url": _ECG_URL, "detail": str(exc)}
+        ) from exc
+    except RequestError as exc:
         raise ServiceUnavailableError(
             context={"service": "ecg", "url": _ECG_URL, "detail": str(exc)}
         ) from exc
