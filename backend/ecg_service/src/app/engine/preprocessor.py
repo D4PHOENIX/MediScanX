@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 
 import cv2
 import numpy as np
@@ -17,12 +17,13 @@ from app.core.exceptions import (
     SignalProcessingError,
     SignalLengthMismatchError,
     InvalidLeadCountError,
+    ECGExtractionError,
 )
 
 logger: logging.Logger = logging.getLogger(__name__)
 
 
-# Private optical preprocessing classes 
+# ── Private optical preprocessing classes ──────────────────────────────────
 
 class _PinkGridRemover:
     """Removes the pink background grid from a scanned ECG image.
@@ -131,14 +132,14 @@ class _WaveformDigitizer:
         """
         self.cfg: Settings = cfg
 
-    def extract_1d_signal(self, lead_img: np.ndarray) -> np.ndarray:
+    def extract_1d_signal(self, lead_img: np.ndarray) -> Tuple[Optional[np.ndarray], float, bool]:
         """Extract a 1D signal from a binary slice of a lead.
 
         Args:
             lead_img (np.ndarray): Sliced image for a specific lead.
 
         Returns:
-            np.ndarray: The normalised 1D signal array.
+            Tuple[Optional[np.ndarray], float, bool]: The normalised 1D signal array (or None if failed), fractional coverage, and boolean flag if span fails.
         """
         height: int
         width: int
@@ -149,8 +150,10 @@ class _WaveformDigitizer:
 
         col_counts: np.ndarray = np.bincount(x_indices, minlength=width)
         valid_cols: np.ndarray = col_counts > 0
-        if not np.any(valid_cols):
-            return np.zeros(self.cfg.seq_length, dtype=np.float32)
+        coverage: float = float(np.sum(valid_cols) / width)
+        
+        if np.sum(valid_cols) < 2:
+            return None, coverage, True
 
         y_sums: np.ndarray = np.bincount(x_indices, weights=y_indices, minlength=width)
         y_centers: np.ndarray = y_sums[valid_cols] / col_counts[valid_cols]
@@ -158,20 +161,24 @@ class _WaveformDigitizer:
         valid_x_arr: np.ndarray = np.where(valid_cols)[0].astype(np.float32)
         raw: np.ndarray = amplitudes.astype(np.float32)
 
-        interpolator: interp1d = interp1d(valid_x_arr, raw, kind='linear',
-                                          fill_value='extrapolate')
+        interpolator: interp1d = interp1d(valid_x_arr, raw, kind='linear')
         full_x: np.ndarray = np.arange(width, dtype=np.float32)
-        interpolated: np.ndarray = interpolator(full_x)
+
+        try:
+            interpolated: np.ndarray = interpolator(full_x)
+        except ValueError:
+            # Trace does not span the lead, interpolation out of bounds
+            return None, coverage, True
 
         resampled: np.ndarray = resample(interpolated, self.cfg.seq_length)
 
         mean_val: np.float64 = np.mean(resampled)
         std_val: np.float64 = np.std(resampled) + 1e-8
         normalised: np.ndarray = (resampled - mean_val) / std_val
-        return normalised.astype(np.float32)
+        return normalised.astype(np.float32), coverage, False
 
 
-# Public ECGPreprocessor 
+# ── Public ECGPreprocessor ───────────────────────────────────────────────────
 
 class ECGPreprocessor:
     """Dual‑input preprocessor: WFDB records and scanned ECG images.
@@ -245,7 +252,7 @@ class ECGPreprocessor:
         tensor: torch.Tensor = torch.tensor(signals_2d, dtype=torch.float32).unsqueeze(0)
         return tensor, signals_2d
 
-    def process_image(self, image_path: str) -> Tuple[torch.Tensor, np.ndarray]:
+    def process_image(self, image_path: str, diagnostic_mode: bool = False, diagnostic_out_dir: str = "/app/data/ecg_diagnostics") -> Tuple[torch.Tensor, np.ndarray]:
         """Run the full optical pipeline on a scanned ECG image.
 
         Args:
@@ -262,6 +269,11 @@ class ECGPreprocessor:
         """
         # 1. Remove pink grid
         binary_img: np.ndarray = self._remover.remove_grid(image_path)
+        
+        if diagnostic_mode:
+            import os
+            os.makedirs(diagnostic_out_dir, exist_ok=True)
+            cv2.imwrite(os.path.join(diagnostic_out_dir, "grid_removed.png"), binary_img)
 
         # 2. Slice into 12 lead images
         lead_images: Dict[str, np.ndarray] = self._slicer.slice_image(binary_img)
@@ -274,14 +286,44 @@ class ECGPreprocessor:
         ]
         signals_list: List[np.ndarray] = []
         lead_name: str
+        coverages: Dict[str, float] = {}
+        span_failures: Dict[str, bool] = {}
+        import os
         for lead_name in lead_order:
             lead_img: np.ndarray | None = lead_images.get(lead_name)
             if lead_img is None:
                 raise SignalProcessingError(
                     f"Lead {lead_name} not found in sliced image"
                 )
-            signal_1d: np.ndarray = self._digitizer.extract_1d_signal(lead_img)
-            signals_list.append(signal_1d)
+            signal_1d: Optional[np.ndarray]
+            cov: float
+            span_failed: bool
+            signal_1d, cov, span_failed = self._digitizer.extract_1d_signal(lead_img)
+            
+            if signal_1d is not None:
+                signals_list.append(signal_1d)
+                
+            coverages[lead_name] = cov
+            span_failures[lead_name] = span_failed
+            
+            if diagnostic_mode:
+                cv2.imwrite(os.path.join(diagnostic_out_dir, f"lead_{lead_name}.png"), lead_img)
+                if signal_1d is not None:
+                    np.save(os.path.join(diagnostic_out_dir, f"signal_{lead_name}.npy"), signal_1d)
+            
+        failed_leads = [
+            lead for lead in lead_order 
+            if coverages[lead] < 0.90 or span_failures[lead]
+        ]
+        if failed_leads:
+            raise ECGExtractionError(
+                "This ECG image could not be read reliably.",
+                coverage=coverages,
+                leads_failed=failed_leads
+            )
+            
+        if len(signals_list) != self.cfg.num_leads:
+            raise SignalProcessingError("Not all leads produced a valid signal.")
 
         signals_2d: np.ndarray = np.stack(signals_list, axis=0).astype(np.float32)
 

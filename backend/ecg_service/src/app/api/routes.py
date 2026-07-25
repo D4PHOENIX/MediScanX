@@ -97,9 +97,11 @@ async def predict(
 
             result = await engine.predict(
                 image_path=tmp_path,
-                input_type="image",
-                use_gradcam=xai,
                 top_k=top_k,
+                input_type='image',
+                use_gradcam=xai,
+                diagnostic_mode=True,
+                diagnostic_out_dir="/app/data/ecg_diagnostics",
             )
         finally:
             try:
