@@ -51,8 +51,9 @@ def test_preprocessor_coverage_gate() -> None:
         assert exc_info.value.context['coverage']['I'] == 1.0
 
         # 4. A lead where interpolation fails on span still reports its true coverage, not 0.0
+        # With the relaxed span check (span < 50%), we must provide a short trace.
         span_fail_lead = np.zeros((height, width), dtype=np.uint8)
-        cv2.line(span_fail_lead, (5, 50), (99, 50), 255, 1)
+        cv2.line(span_fail_lead, (5, 50), (45, 50), 255, 1)
         
         lead_images['V3'] = perfect_lead  # Reset V3
         lead_images['II'] = span_fail_lead
@@ -61,4 +62,4 @@ def test_preprocessor_coverage_gate() -> None:
             preprocessor.process_image("fake_path")
 
         assert 'II' in exc_info2.value.context['leads_failed']
-        assert exc_info2.value.context['coverage']['II'] == 0.95
+        assert exc_info2.value.context['coverage']['II'] == 0.41

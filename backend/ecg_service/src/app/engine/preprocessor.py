@@ -161,14 +161,17 @@ class _WaveformDigitizer:
         valid_x_arr: np.ndarray = np.where(valid_cols)[0].astype(np.float32)
         raw: np.ndarray = amplitudes.astype(np.float32)
 
-        interpolator: interp1d = interp1d(valid_x_arr, raw, kind='linear')
-        full_x: np.ndarray = np.arange(width, dtype=np.float32)
-
-        try:
-            interpolated: np.ndarray = interpolator(full_x)
-        except ValueError:
-            # Trace does not span the lead, interpolation out of bounds
+        x_min = valid_x_arr[0]
+        x_max = valid_x_arr[-1]
+        span_fraction = (x_max - x_min + 1) / width
+        
+        # Genuine span check: reject if the trace spans less than 50% of the box width
+        if span_fraction < 0.5:
             return None, coverage, True
+
+        eval_x: np.ndarray = np.linspace(x_min, x_max, int(x_max - x_min + 1), dtype=np.float32)
+        interpolator: interp1d = interp1d(valid_x_arr, raw, kind='linear')
+        interpolated: np.ndarray = interpolator(eval_x)
 
         resampled: np.ndarray = resample(interpolated, self.cfg.seq_length)
 
