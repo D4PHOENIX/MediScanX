@@ -82,6 +82,8 @@ class ECGDiagnosticEngine:
         input_type: str = 'wfdb',
         use_gradcam: bool = False,
         top_k: int = 5,
+        diagnostic_mode: bool = False,
+        diagnostic_out_dir: str = "/app/data/ecg_diagnostics",
     ) -> Dict[str, Any]:
         """Execute a synchronous diagnostic pass.
 
@@ -102,24 +104,34 @@ class ECGDiagnosticEngine:
         """
         t_start: float = time.perf_counter()
 
-        # Preprocessing 
+        # ---- 1. Preprocessing -------------------------------------------------
         tensor: torch.Tensor
         signal_array: np.ndarray
         if input_type == 'wfdb':
             tensor, signal_array = self.preprocessor.process_wfdb(input_path)
         elif input_type == 'image':
-            tensor, signal_array = self.preprocessor.process_image(input_path)
+            tensor, signal_array = self.preprocessor.process_image(
+                input_path, 
+                diagnostic_mode=diagnostic_mode, 
+                diagnostic_out_dir=diagnostic_out_dir
+            )
         else:
             raise ValueError(f"Unsupported input_type: {input_type!r}")
 
         tensor = tensor.to(self.cfg.device)
+        
+        # Ensure tensor is completely finite before invoking the model
+        if not torch.isfinite(tensor).all():
+            raise ECGInferenceError("Preprocessed tensor contains non-finite values (NaN/Inf).")
+        
         # Use lead I for visualisation overlays (index 0)
         try:
             one_lead_signal: np.ndarray = signal_array[0]
+            one_lead_signal = np.nan_to_num(one_lead_signal, nan=0.0, posinf=0.0, neginf=0.0)
         except IndexError as e:
             raise ECGInferenceError("Signal array is empty or lacks required leads.") from e
 
-        # Inference 
+        # ---- 2. Inference ----------------------------------------------------
         full_probs: np.ndarray
         if use_gradcam or self.onnx_session is None:
             # PyTorch path — required for Grad-CAM backward pass.
@@ -129,6 +141,8 @@ class ECGDiagnosticEngine:
                 )
             try:
                 with torch.no_grad():
+                    if not torch.isfinite(tensor).all():
+                        raise ECGInferenceError("Preprocessed tensor contains non-finite values (NaN/Inf).")
                     logits: torch.Tensor = self.model(tensor)
                 full_probs = torch.sigmoid(logits).squeeze().detach().cpu().numpy()
             except RuntimeError as e:
@@ -140,6 +154,9 @@ class ECGDiagnosticEngine:
             # ONNX path — no gradients needed.
             try:
                 with torch.no_grad():
+                    # Ensure tensor is completely finite before invoking the model
+                    if not torch.isfinite(tensor).all():
+                        raise ECGInferenceError("Preprocessed tensor contains non-finite values (NaN/Inf).")
                     input_np: np.ndarray = tensor.cpu().numpy().astype(np.float32)
                 ort_inputs: Dict[str, np.ndarray] = {
                     self.onnx_session.get_inputs()[0].name: input_np
@@ -155,7 +172,7 @@ class ECGDiagnosticEngine:
         base_probs: np.ndarray = full_probs[:num_labels]
         top_indices: np.ndarray = np.argsort(base_probs)[::-1][:top_k]
 
-        # Build findings 
+        # ---- 3. Build findings -----------------------------------------------
         top_findings: List[Dict[str, Any]] = []
         class_idx: np.intp
         for class_idx in top_indices:
