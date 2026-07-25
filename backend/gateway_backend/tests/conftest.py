@@ -69,6 +69,9 @@ from app.main import app
 @pytest.fixture
 def test_app(auth_headers):
     """Yield the FastAPI application instance for integration tests."""
+    from httpx import AsyncClient
+    if not hasattr(app.state, "http_client"):
+        app.state.http_client = AsyncClient()
     return app
 
 
@@ -86,5 +89,5 @@ async def async_client(test_app):
 def mock_jwks():
     """Mock the JWKS fetcher to prevent external HTTP calls during testing."""
     dummy_jwks = {"keys": [PUBLIC_JWK]}
-    with patch("app.core.security.get_jwks", return_value=dummy_jwks):
+    with patch("app.core.security._jwks_cache.get_keys", return_value=dummy_jwks):
         yield

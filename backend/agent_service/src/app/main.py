@@ -42,6 +42,16 @@ async def lifespan(application: FastAPI) -> AsyncGenerator[None, None]:
 
     google_model = config.google_model
 
+    # Guard: Validate SUPABASE_URL is present and well-formed
+    if not config.supabase_url or not config.supabase_url.strip():
+        logger.error("FATAL: SUPABASE_URL is missing or empty.")
+        raise RuntimeError("SUPABASE_URL is missing or empty.")
+    from urllib.parse import urlparse
+    parsed_url = urlparse(config.supabase_url)
+    if not parsed_url.scheme or not parsed_url.netloc or not parsed_url.scheme.startswith("http"):
+        logger.error("FATAL: SUPABASE_URL must be a valid http/https URL.")
+        raise RuntimeError("SUPABASE_URL must be a valid http/https URL.")
+
     logger.info("Agent service starting — building LangGraph workflow…")
 
     from app.agent.graph import build_graph

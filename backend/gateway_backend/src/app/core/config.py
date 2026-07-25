@@ -50,6 +50,19 @@ class GatewayConfig(BaseSettings):
         """
         return f"{self.supabase_url}/auth/v1/.well-known/jwks.json"
 
+
+    @field_validator("supabase_url")
+    @classmethod
+    def validate_supabase_url(cls, v: str) -> str:
+        """Ensures the Supabase URL is present and well-formed."""
+        if not v or not v.strip():
+            raise ValueError("SUPABASE_URL cannot be empty")
+        from urllib.parse import urlparse
+        parsed = urlparse(v)
+        if not parsed.scheme or not parsed.netloc or not parsed.scheme.startswith("http"):
+            raise ValueError("SUPABASE_URL must be a valid http/https URL")
+        return v
+
     @field_validator("database_url")
     @classmethod
     def validate_database_url_pooler(cls, v: str | None) -> str | None:

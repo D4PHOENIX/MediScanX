@@ -6,12 +6,11 @@ provides an optional, strictly-controlled bypass mechanism for isolated developm
 environments.
 """
 
-import json
+import time
+import httpx
 import logging
 import secrets
-from functools import lru_cache
 from typing import Any, Dict, Optional
-from urllib.request import urlopen
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -25,23 +24,39 @@ security_scheme: HTTPBearer = HTTPBearer(auto_error=False)
 
 
 
-@lru_cache(maxsize=1)
-def get_jwks(jwks_url: str) -> Dict[str, Any]:
-    """Retrieves and caches the JSON Web Key Set (JWKS) from the identity provider.
+class _JWKSCache:
+    """Manages JWKS fetching with TTL caching and negative-result backoff."""
+    def __init__(self, ttl: float = 900.0, backoff: float = 15.0):
+        self._keys: Dict[str, Any] = {}
+        self._expires_at: float = 0.0
+        self._ttl: float = ttl
+        self._backoff: float = backoff
 
-    Executes a synchronous HTTP request to fetch the public keys required for
-    verifying incoming JWT signatures. The result is cached to minimize latency
-    and network overhead during subsequent authentication attempts.
+    async def get_keys(self, url: str) -> Dict[str, Any]:
+        now = time.monotonic()
+        if self._keys and now < self._expires_at:
+            return self._keys
+            
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                data = resp.json()
+                self._keys = data
+                self._expires_at = now + self._ttl
+                logger.info("JWKS refreshed successfully.")
+                return data
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as exc:
+            logger.error("Failed to fetch JWKS from %s: %s", url, exc)
+            self._expires_at = now + self._backoff
+            if self._keys:
+                return self._keys
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Identity provider unavailable: {str(exc)}"
+            ) from exc
 
-    Args:
-        jwks_url (str): The absolute URL endpoint hosting the JWKS payload.
-
-    Returns:
-        Dict[str, Any]: The parsed JSON representation of the key set.
-    """
-    with urlopen(jwks_url) as response:
-        return json.loads(response.read().decode("utf-8"))
-
+_jwks_cache = _JWKSCache()
 
 async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_scheme),
@@ -90,7 +105,7 @@ async def get_current_user(
                 detail="Missing key ID (kid) in token header",
             )
             
-        jwks = get_jwks(gateway_config.supabase_jwks_url)
+        jwks = await _jwks_cache.get_keys(gateway_config.supabase_jwks_url)
         
         payload: dict = jwt.decode(
             token,

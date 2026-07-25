@@ -179,5 +179,5 @@ def test_user_id(auth_headers):
 def mock_jwks():
     from unittest.mock import patch
     dummy_jwks = {"keys": [PUBLIC_JWK]}
-    with patch("app.core.security.get_jwks", return_value=dummy_jwks):
+    with patch("app.core.security._jwks_cache.get_keys", return_value=dummy_jwks):
         yield
