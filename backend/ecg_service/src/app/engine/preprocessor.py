@@ -279,8 +279,6 @@ class ECGPreprocessor:
         signals_list: List[np.ndarray] = []
         coverages: Dict[str, float] = {}
         span_failures: Dict[str, bool] = {}
-        import os
-        
         for lead_name in lead_order:
             lead_img: np.ndarray | None = lead_images.get(lead_name)
             if lead_img is None:
