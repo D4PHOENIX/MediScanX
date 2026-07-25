@@ -57,14 +57,28 @@ async def test_baseline_harness():
     )
     preprocessor = ECGPreprocessor(cfg)
     
-    from app.engine.ecg_engine import ECGEngine
-    engine = ECGEngine(cfg=cfg)
+    from app.engine.diagnostic_engine import ECGDiagnosticEngine
+    from app.models.cnn_bilstm import ECGClassifier
+
     try:
-        await engine.initialize()
+        model = ECGClassifier.from_checkpoint(
+            cfg.pytorch_ckpt_path,
+            device=cfg.device,
+            num_leads=cfg.num_leads,
+            num_classes=cfg.num_classes,
+        )
     except Exception as e:
         print(f"Failed to load real model: {e}")
         return
-        
+
+    diagnostic_engine = ECGDiagnosticEngine(
+        cfg=cfg,
+        onnx_session=None,
+        model=model,
+        preprocessor=preprocessor,
+        xai_engine=None,
+    )
+    
     # Generate synthetic 10-second record (12, 5000)
     t = np.linspace(0, 10, 5000)
     signal = np.zeros((12, 5000), dtype=np.float32)
@@ -82,7 +96,7 @@ async def test_baseline_harness():
     from unittest.mock import patch
     with patch('app.engine.diagnostic_engine.ECGPreprocessor.process_wfdb', return_value=(tensor_gt, signal)):
         # Run ground-truth WFDB prediction
-        result_gt = await engine.predict("fake.dat", input_type="wfdb", top_k=1)
+        result_gt = await diagnostic_engine.async_run_diagnostic("fake.dat", input_type="wfdb", top_k=1)
         gt_class = result_gt["predicted_class"]
         gt_conf = result_gt["predicted_confidence"]
         
@@ -114,7 +128,7 @@ async def test_baseline_harness():
                 cv2.imwrite("/tmp/test_harness_temp.png", img)
                 
                 try:
-                    result_img = await engine.predict("/tmp/test_harness_temp.png", input_type="image", top_k=1)
+                    result_img = await diagnostic_engine.async_run_diagnostic("/tmp/test_harness_temp.png", input_type="image", top_k=1)
                     img_class = result_img["predicted_class"]
                     img_conf = result_img["predicted_confidence"]
                     
