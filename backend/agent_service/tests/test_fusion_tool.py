@@ -114,3 +114,44 @@ async def test_fuse_multimodal_findings_all_modalities_bounded(auth_headers) -> 
     assert 0.0 <= result["aggregated_risk_score"] <= 1.0
     assert result["critical_alert"] is True
     assert len(result["detected_conditions"]) == 3
+
+@pytest.mark.asyncio
+async def test_orchestrate_fusion_enforces_user_isolation(auth_headers) -> None:
+    """Verify that patient_id is absent from args_schema and that cross-tenant access fails."""
+    from app.agent.tools.fusion import orchestrate_fusion
+    from langchain_core.runnables import RunnableConfig
+    from unittest.mock import AsyncMock, MagicMock
+    import uuid
+
+    # 1. Verify patient_id is absent from args_schema
+    schema = orchestrate_fusion.args_schema.schema()
+    assert "patient_id" not in schema.get("properties", {})
+
+    # 2. Verify that another user's scan IDs cannot be reached
+    # We will mock the database connection to simulate the isolation check
+    dummy_scan_id = uuid.uuid4()
+    dummy_user_id = str(uuid.uuid4())
+    
+    mock_conn = AsyncMock()
+    # Mock fetch to return empty list when queried (simulate scan not found due to user_id mismatch)
+    mock_conn.fetch.return_value = []
+    
+    mock_acquire_ctx = MagicMock()
+    mock_acquire_ctx.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_acquire_ctx.__aexit__ = AsyncMock()
+    mock_pool = MagicMock()
+    mock_pool.acquire.return_value = mock_acquire_ctx
+    
+    config = RunnableConfig(configurable={"auth_user_id": dummy_user_id, "db_pool": mock_pool})
+    
+    result = await orchestrate_fusion.ainvoke({"selected_scan_ids": [str(dummy_scan_id)]}, config=config)
+    
+    # Assert generic not-found message
+    assert "No valid scans found" in result["message"]
+    
+    # Verify the query included the user_id constraint
+    mock_conn.fetch.assert_called_once()
+    query = mock_conn.fetch.call_args[0][0]
+    args = mock_conn.fetch.call_args[0][1:]
+    assert "user_id = $2" in query
+    assert args[1] == dummy_user_id
