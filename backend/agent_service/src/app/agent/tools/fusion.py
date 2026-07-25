@@ -191,8 +191,8 @@ async def _run_fusion_queries(
 import uuid
 @tool(args_schema=OrchestrateFusionSchema)
 async def orchestrate_fusion(
+    config: RunnableConfig,
     selected_scan_ids: Optional[List[uuid.UUID]] = None,
-    config: RunnableConfig = None,
 ) -> Dict[str, Any]:
     """Selective fusion orchestrator that fetches inference payloads for chosen scans.
 

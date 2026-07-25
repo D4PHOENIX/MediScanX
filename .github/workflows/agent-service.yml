@@ -43,7 +43,7 @@ env:
     # Pinned uv version — bump intentionally so upgrades are reviewed.
     UV_VERSION: "0.5.18"
     # Python version must match requires-python in pyproject.toml
-    PYTHON_VERSION: "3.10"
+    PYTHON_VERSION: "3.11"
     # Docker image name (no registry push in PR pipelines)
     IMAGE_NAME: mediscanx/agent-service
 

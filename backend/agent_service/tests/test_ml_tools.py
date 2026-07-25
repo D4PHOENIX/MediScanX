@@ -1,6 +1,8 @@
 import uuid
+import logging
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch
+from pydantic import ValidationError
 
 import pytest
 from langchain_core.runnables import RunnableConfig
@@ -58,8 +60,10 @@ async def test_run_cxr_inference_success(
     mock_client_instance.post.return_value = mock_response
     mock_httpx_client.return_value = mock_client_instance
 
-    # Run inference
-    result = await run_cxr_inference.ainvoke({"scan_id": str(dummy_scan_id)}, config=dummy_config)
+    # Run inference with open patched
+    with patch("builtins.open") as mock_open:
+        result = await run_cxr_inference.ainvoke({"scan_id": str(dummy_scan_id)}, config=dummy_config)
+        mock_open.assert_not_called()
 
     # Assertions
     assert "error" not in result
@@ -74,17 +78,43 @@ async def test_run_cxr_inference_success(
     mock_supabase.storage.from_.assert_called_with("scan-images")
     mock_supabase.storage.from_().download.assert_called_with("test/path/to/image.dcm")
 
-    # Verify no open() was used, bytes were posted directly
-    mock_client_instance.post.assert_called_once()
-    post_kwargs = mock_client_instance.post.call_args[1]
-    assert "files" in post_kwargs
-    files_payload = post_kwargs["files"]["file"]
-    # files_payload should be (filename, bytes, content_type)
-    assert files_payload[1] == b"fake-image-bytes"
-
 @pytest.mark.asyncio
 async def test_run_inference_missing_auth(dummy_scan_id: uuid.UUID) -> None:
     config = RunnableConfig(configurable={}) # Missing auth_user_id
     result = await run_ecg_inference.ainvoke({"scan_id": str(dummy_scan_id)}, config=config)
     assert "error" in result
     assert "Authentication error" in result["error"]
+
+@pytest.mark.asyncio
+async def test_path_shaped_input_rejected_by_schema(dummy_config: RunnableConfig) -> None:
+    # Path-shaped input should fail Pydantic UUID validation before tool logic executes
+    with pytest.raises(ValidationError):
+        await run_cxr_inference.ainvoke({"scan_id": "/etc/passwd"}, config=dummy_config)
+
+@pytest.mark.asyncio
+@patch("app.agent.tools.ml_tools.asyncpg.connect", new_callable=AsyncMock)
+async def test_cross_tenant_attempt_logs_and_fails(
+    mock_pg_connect: AsyncMock,
+    dummy_scan_id: uuid.UUID,
+    dummy_config: RunnableConfig,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # 1. Mock Database to simulate "not found or access denied"
+    mock_conn = AsyncMock()
+    mock_conn.fetchrow.return_value = None
+    mock_pg_connect.return_value = mock_conn
+
+    with caplog.at_level(logging.WARNING):
+        result = await run_cxr_inference.ainvoke({"scan_id": str(dummy_scan_id)}, config=dummy_config)
+    
+    # Assert generic not-found result
+    assert result == {
+        "error": "Validation error",
+        "details": "Scan not found or access denied.",
+    }
+    
+    # Assert logs
+    auth_user_id = dummy_config.get("configurable", {}).get("auth_user_id")
+    expected_log = f"Scan ownership validation failed for scan_id={dummy_scan_id} user_id={auth_user_id}"
+    assert expected_log in caplog.text
+

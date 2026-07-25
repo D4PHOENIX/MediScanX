@@ -103,19 +103,8 @@ async def test_app():
     async def _fake_build_graph(*args, **kwargs):
         yield mock_graph, mock_checkpointer
 
-    # Build a fake module object that looks like app.agent.graph
-    # but contains only the symbol(s) that main.py imports from it.
-    fake_graph_mod = types.ModuleType("app.agent.graph")
-    fake_graph_mod.build_graph = _fake_build_graph  # type: ignore[attr-defined]
-
-    # Inject it into sys.modules BEFORE importing app.main.
-    # When lifespan runs 'from app.agent.graph import build_graph', Python
-    # finds our fake module in sys.modules and uses our mock directly.
-    original = sys.modules.get("app.agent.graph")
-    sys.modules["app.agent.graph"] = fake_graph_mod
-    try:
-        from app.main import app
-
+    from app.main import app
+    with patch("app.agent.graph.build_graph", new=_fake_build_graph):
         with patch("app.main.asyncpg.create_pool", new_callable=AsyncMock) as mock_pool:
             mock_pool_obj = MagicMock()
             acquire_ctx = MagicMock()
@@ -129,13 +118,6 @@ async def test_app():
             mock_pool.return_value = mock_pool_obj
             async with app.router.lifespan_context(app):
                 yield app
-    finally:
-        # Restore sys.modules to its original state so other test sessions
-        # or importlib.reload() calls are not affected.
-        if original is None:
-            sys.modules.pop("app.agent.graph", None)
-        else:
-            sys.modules["app.agent.graph"] = original
 
 
 @pytest.fixture
