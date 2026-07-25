@@ -91,7 +91,7 @@ async def db_pool(postgres_container):
     yield pool
     await pool.close()
 
-@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Integration test requires local schema file which is not checked into version control")
+
 @pytest.mark.asyncio
 async def test_rag_integration_end_to_end(db_pool, auth_headers):
     config = RunnableConfig(configurable={"db_pool": db_pool})

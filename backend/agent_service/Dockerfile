@@ -1,5 +1,5 @@
 # Stage 1: Builder
-FROM python:3.10-slim AS builder
+FROM python:3.11-slim AS builder
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 ENV UV_COMPILE_BYTECODE=1 \
@@ -20,7 +20,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 
 # Stage 2: Runtime
-FROM python:3.10-slim AS runtime
+FROM python:3.11-slim AS runtime
 
 # Install curl for HEALTHCHECK
 RUN apt-get update && apt-get install -y --no-install-recommends curl \
