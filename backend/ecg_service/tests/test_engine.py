@@ -28,3 +28,30 @@ def test_preprocessor_fault_injection() -> None:
         mock_rdsamp.return_value = (np.random.randn(300, 12), None)
         with pytest.raises(SignalLengthMismatchError):
             preprocessor.process_wfdb("fake_record")
+
+
+def test_finiteness_gate() -> None:
+    from app.engine.diagnostic_engine import ECGDiagnosticEngine
+    from app.core.exceptions import ECGInferenceError
+    import numpy as np
+    import torch
+    
+    mock_cfg = MagicMock()
+    mock_cfg.device = torch.device('cpu')
+    mock_preprocessor = MagicMock()
+    
+    # Preprocessor returns a tensor with a NaN
+    bad_tensor = torch.ones((1, 12, 500))
+    bad_tensor[0, 0, 0] = float('nan')
+    mock_preprocessor.process_wfdb.return_value = (bad_tensor, np.ones((12, 500)))
+    
+    engine = ECGDiagnosticEngine(
+        cfg=mock_cfg,
+        onnx_session=MagicMock(),
+        model=None,
+        preprocessor=mock_preprocessor,
+        xai_engine=None
+    )
+    
+    with pytest.raises(ECGInferenceError, match="non-finite values"):
+        engine.run_diagnostic("fake", input_type="wfdb")

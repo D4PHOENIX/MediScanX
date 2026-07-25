@@ -121,11 +121,13 @@ class ECGEngine:
     async def predict(
         self,
         image_path: str,
-        top_k: int = 5,
         input_type: str = 'wfdb',
         use_gradcam: bool = False,
+        top_k: int = 5,
+        diagnostic_mode: bool = False,
+        diagnostic_out_dir: str = "/app/data/ecg_diagnostics",
     ) -> Dict[str, Any]:
-        """Run a full diagnostic pass asynchronously.
+        """Process an ECG input and return diagnostic findings.
 
         Args:
             image_path (str): Path to the input file (WFDB record or scanned image).
@@ -150,5 +152,7 @@ class ECGEngine:
             input_type=input_type,
             use_gradcam=use_gradcam,
             top_k=top_k,
+            diagnostic_mode=diagnostic_mode,
+            diagnostic_out_dir=diagnostic_out_dir,
         )
         return result

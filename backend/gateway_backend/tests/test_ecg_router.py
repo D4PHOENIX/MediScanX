@@ -116,3 +116,40 @@ async def test_ecg_predict_upstream_error(auth_headers):
     data = response.json()
     assert data.get("error") is True
     assert data.get("type") == "ServiceUnavailableError"
+
+
+@pytest.mark.asyncio
+async def test_ecg_predict_422_forwarding(auth_headers):
+    """Test that a 422 from upstream is forwarded directly to the client."""
+    mock_client = AsyncMock()
+    
+    req = HttpxRequest("POST", f"{gateway_config.ecg_service_url}/predict")
+    mock_response = Response(status_code=422, request=req, json={
+        "error": "digitization_failed",
+        "message": "This ECG image could not be read reliably.",
+        "leads_failed": ["I"],
+        "coverage": {"I": 0.1},
+        "guidance": "Ensure even lighting..."
+    })
+    
+    mock_client.post.side_effect = HTTPStatusError(
+        "Unprocessable Entity",
+        request=req,
+        response=mock_response
+    )
+    
+    app.state.http_client = mock_client    
+    try:
+        response = client.post(
+            "/api/v1/ecg/predict", 
+            files={"file": ("ecg.csv", b"fake", "text/csv")},
+            data={"top_k": 3},
+            headers=auth_headers,
+        )
+    finally:
+        pass
+    assert response.status_code == 422
+    data = response.json()
+    assert data.get("error") == "digitization_failed"
+    assert data.get("leads_failed") == ["I"]
+    assert data.get("coverage") == {"I": 0.1}

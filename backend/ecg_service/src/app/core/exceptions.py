@@ -272,6 +272,30 @@ class ECGEngineNotReadyError(ECGBaseException):
 #  Exception Registry — FastAPI Integration
 # =============================================================================
 
+class ECGExtractionError(SignalProcessingError):
+    """Raised when the optical extraction fails due to insufficient coverage."""
+
+    def __init__(
+        self,
+        message: str = "This ECG image could not be read reliably.",
+        coverage: Optional[Dict[str, float]] = None,
+        leads_failed: Optional[list] = None,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        ctx: Dict[str, Any] = context or {}
+        if coverage:
+            ctx["coverage"] = coverage
+        if leads_failed:
+            ctx["leads_failed"] = leads_failed
+        
+        ctx["guidance"] = "Ensure even lighting, full page in frame, no shadows or glare, portrait orientation, and avoid photographing at an angle."
+        
+        super().__init__(
+            message=message,
+            context=ctx,
+        )
+
+
 class ExceptionRegistry:
     """Translates ECG domain exceptions into structured HTTP JSON responses.
 
@@ -318,13 +342,25 @@ class ExceptionRegistry:
                 exc.message,
                 exc.context,
             )
+            
+            content = {
+                "error": True,
+                "type": exc.__class__.__name__,
+                "message": exc.message,
+                "context": exc.context,
+            }
+            
+            if isinstance(exc, ECGExtractionError):
+                content = {
+                    "error": "digitization_failed",
+                    "message": exc.message,
+                    "leads_failed": exc.context.get("leads_failed", []),
+                    "coverage": exc.context.get("coverage", {}),
+                    "guidance": exc.context.get("guidance", ""),
+                }
+            
             return JSONResponse(
                 status_code=exc.status_code,
                 headers=exc.headers if exc.headers else None,
-                content={
-                    "error": True,
-                    "type": exc.__class__.__name__,
-                    "message": exc.message,
-                    "context": exc.context,
-                },
+                content=content,
             )

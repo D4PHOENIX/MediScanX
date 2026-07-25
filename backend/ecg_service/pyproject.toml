@@ -55,5 +55,8 @@ filterwarnings = [
     "ignore::UserWarning",
     "ignore::DeprecationWarning"
 ]
+markers = [
+    "integration: marks tests as integration tests (deselect with '-m \"not integration\"')"
+]
 
 
