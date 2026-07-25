@@ -224,7 +224,21 @@ class ECGPreprocessor:
         self._digitizer: _WaveformDigitizer = _WaveformDigitizer(cfg)
 
     def process_wfdb(self, file_path: str) -> Tuple[torch.Tensor, np.ndarray]:
-        """Read a WFDB ``.dat`` / ``.hea`` pair and normalise."""
+        """Read a WFDB ``.dat`` / ``.hea`` pair and normalise.
+
+        Args:
+            file_path (str): File path to the WFDB record.
+
+        Returns:
+            Tuple[torch.Tensor, np.ndarray]: A tuple containing the tensor of shape
+                ``(1, num_leads, seq_length)`` and raw signal array of shape
+                ``(num_leads, seq_length)``.
+
+        Raises:
+            ECGFileReadError: If the file path does not point to a valid record.
+            InvalidLeadCountError: If the read signals have incorrect lead counts.
+            SignalLengthMismatchError: If the processed signal length is invalid.
+        """
         path: Path = Path(file_path)
         base: Path = path.with_suffix('')
         if not path.exists() and not (base.with_suffix('.dat')).exists():
