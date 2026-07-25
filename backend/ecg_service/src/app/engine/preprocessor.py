@@ -8,7 +8,6 @@ import cv2
 import numpy as np
 import torch
 import wfdb
-from scipy.interpolate import interp1d
 from scipy.signal import resample
 
 from app.core.config import Settings
@@ -25,8 +24,9 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 # ── Private optical preprocessing classes ──────────────────────────────────
 
-class _PinkGridRemover:
-    """Removes the pink background grid from a scanned ECG image.
+class _AdaptiveGridRemover:
+    """Removes the background grid using adaptive geometry (V2).
+    Immune to grayscale, bad lighting, and varying color spaces.
 
     Attributes:
         cfg (Settings): Preprocessing configuration constraints.
@@ -40,7 +40,7 @@ class _PinkGridRemover:
         self.cfg: Settings = cfg
 
     def remove_grid(self, image_path: str) -> np.ndarray:
-        """Process image to remove the pink grid.
+        """Process image to geometrically remove the grid.
 
         Args:
             image_path (str): File path to the ECG input image.
@@ -51,26 +51,29 @@ class _PinkGridRemover:
         Raises:
             ECGFileReadError: If the image is not found or fails to read.
         """
-        img: np.ndarray = cv2.imread(image_path)
+        img: np.ndarray = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
         if img is None:
             raise ECGFileReadError(f"Image not found at path: {image_path}")
-        hsv: np.ndarray = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-        mask1: np.ndarray = cv2.inRange(hsv,
-                                        self.cfg.hsv_lower_pink1,
-                                        self.cfg.hsv_upper_pink1)
-        mask2: np.ndarray = cv2.inRange(hsv,
-                                        self.cfg.hsv_lower_pink2,
-                                        self.cfg.hsv_upper_pink2)
-        combined: np.ndarray = mask1 | mask2
-        ink_mask: np.ndarray = cv2.bitwise_not(combined)
-        clean: np.ndarray = np.ones_like(img) * 255
-        isolated: np.ndarray = cv2.bitwise_and(img, img, mask=ink_mask)
-        isolated[ink_mask == 0] = 255
-        gray: np.ndarray = cv2.cvtColor(isolated, cv2.COLOR_BGR2GRAY)
-        _: float
-        binary: np.ndarray
-        _, binary = cv2.threshold(gray, 120, 255, cv2.THRESH_BINARY_INV)
-        return binary
+
+        # 1. Adaptive Thresholding (Handles shadows and dim lighting)
+        binary: np.ndarray = cv2.adaptiveThreshold(
+            img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 10
+        )
+
+        # 2. Morphological Grid Subtraction (Geometry instead of Color)
+        horizontal_kernel: np.ndarray = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1))
+        remove_horizontal: np.ndarray = cv2.morphologyEx(binary, cv2.MORPH_OPEN, horizontal_kernel, iterations=1)
+        
+        vertical_kernel: np.ndarray = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 40))
+        remove_vertical: np.ndarray = cv2.morphologyEx(binary, cv2.MORPH_OPEN, vertical_kernel, iterations=1)
+        
+        grid: np.ndarray = cv2.add(remove_horizontal, remove_vertical)
+        trace_only: np.ndarray = cv2.subtract(binary, grid)
+
+        cleanup_kernel: np.ndarray = np.ones((3, 3), np.uint8)
+        clean_trace: np.ndarray = cv2.morphologyEx(trace_only, cv2.MORPH_OPEN, cleanup_kernel, iterations=1)
+
+        return clean_trace
 
 
 class _ECGGridSlicer:
@@ -133,7 +136,7 @@ class _WaveformDigitizer:
         self.cfg: Settings = cfg
 
     def extract_1d_signal(self, lead_img: np.ndarray) -> Tuple[Optional[np.ndarray], float, bool]:
-        """Extract a 1D signal from a binary slice of a lead.
+        """Extract a 1D signal from a binary slice of a lead safely.
 
         Args:
             lead_img (np.ndarray): Sliced image for a specific lead.
@@ -144,40 +147,54 @@ class _WaveformDigitizer:
         height: int
         width: int
         height, width = lead_img.shape
-        y_indices: np.ndarray
-        x_indices: np.ndarray
-        y_indices, x_indices = np.where(lead_img == 255)
-
-        col_counts: np.ndarray = np.bincount(x_indices, minlength=width)
-        valid_cols: np.ndarray = col_counts > 0
-        coverage: float = float(np.sum(valid_cols) / width)
         
-        if np.sum(valid_cols) < 2:
+        raw_signal: np.ndarray = np.zeros(width, dtype=np.float32)
+        valid_cols_count: int = 0
+        
+        for x in range(width):
+            column: np.ndarray = lead_img[:, x]
+            y_coords: np.ndarray = np.where(column > 0)[0]
+            if len(y_coords) > 0:
+                raw_signal[x] = np.mean(y_coords)
+                valid_cols_count += 1
+            else:
+                # Safe masking to prevent Inf crash during interpolation
+                raw_signal[x] = np.nan
+
+        coverage: float = float(valid_cols_count / width)
+        
+        if valid_cols_count < 2:
             return None, coverage, True
 
-        y_sums: np.ndarray = np.bincount(x_indices, weights=y_indices, minlength=width)
-        y_centers: np.ndarray = y_sums[valid_cols] / col_counts[valid_cols]
-        amplitudes: np.ndarray = height - y_centers
-        valid_x_arr: np.ndarray = np.where(valid_cols)[0].astype(np.float32)
-        raw: np.ndarray = amplitudes.astype(np.float32)
-
-        x_min = valid_x_arr[0]
-        x_max = valid_x_arr[-1]
-        span_fraction = (x_max - x_min + 1) / width
+        valid_mask: np.ndarray = ~np.isnan(raw_signal)
+        valid_x_arr: np.ndarray = np.where(valid_mask)[0]
+        
+        x_min: int = valid_x_arr[0]
+        x_max: int = valid_x_arr[-1]
+        span_fraction: float = (x_max - x_min + 1) / width
         
         # Genuine span check: reject if the trace spans less than 50% of the box width
         if span_fraction < 0.5:
             return None, coverage, True
 
-        eval_x: np.ndarray = np.linspace(x_min, x_max, int(x_max - x_min + 1), dtype=np.float32)
-        interpolator: interp1d = interp1d(valid_x_arr, raw, kind='linear')
-        interpolated: np.ndarray = interpolator(eval_x)
-
-        resampled: np.ndarray = resample(interpolated, self.cfg.seq_length)
+        # Safe interpolation over the missing NaN gaps
+        raw_signal[~valid_mask] = np.interp(
+            np.flatnonzero(~valid_mask),
+            np.flatnonzero(valid_mask),
+            raw_signal[valid_mask]
+        )
+        
+        # Invert to Cartesian math coordinates
+        amplitudes: np.ndarray = height - raw_signal
+        
+        # Isolate the exact genuine span to avoid padding artifacts
+        cropped_signal: np.ndarray = amplitudes[x_min:x_max+1]
+        resampled: np.ndarray = resample(cropped_signal, self.cfg.seq_length)
 
         mean_val: np.float64 = np.mean(resampled)
         std_val: np.float64 = np.std(resampled) + 1e-8
         normalised: np.ndarray = (resampled - mean_val) / std_val
+        
         return normalised.astype(np.float32), coverage, False
 
 
@@ -202,33 +219,18 @@ class ECGPreprocessor:
         """
         self.cfg: Settings = cfg
         # Optical pipeline components
-        self._remover: _PinkGridRemover = _PinkGridRemover(cfg)
+        self._remover: _AdaptiveGridRemover = _AdaptiveGridRemover(cfg)
         self._slicer: _ECGGridSlicer = _ECGGridSlicer(cfg)
         self._digitizer: _WaveformDigitizer = _WaveformDigitizer(cfg)
 
     def process_wfdb(self, file_path: str) -> Tuple[torch.Tensor, np.ndarray]:
-        """Read a WFDB ``.dat`` / ``.hea`` pair and normalise.
-
-        Args:
-            file_path (str): File path to the WFDB record.
-
-        Returns:
-            Tuple[torch.Tensor, np.ndarray]: A tuple containing the tensor
-                of shape ``(1, 12, 500)`` and raw signal array of shape ``(12, 500)``.
-
-        Raises:
-            ECGFileReadError: If the file path does not point to a valid record.
-            InvalidLeadCountError: If the read signals have incorrect lead counts.
-            SignalLengthMismatchError: If the processed signal length is invalid.
-        """
+        """Read a WFDB ``.dat`` / ``.hea`` pair and normalise."""
         path: Path = Path(file_path)
-        # wfdb.rdsamp expects the base name without extension
         base: Path = path.with_suffix('')
         if not path.exists() and not (base.with_suffix('.dat')).exists():
             raise ECGFileReadError(f"ECG record not found: {file_path}")
 
         sig: np.ndarray
-        _: Any
         try:
             sig, _ = wfdb.rdsamp(str(base))
         except Exception as exc:
@@ -256,21 +258,8 @@ class ECGPreprocessor:
         return tensor, signals_2d
 
     def process_image(self, image_path: str, diagnostic_mode: bool = False, diagnostic_out_dir: str = "/app/data/ecg_diagnostics") -> Tuple[torch.Tensor, np.ndarray]:
-        """Run the full optical pipeline on a scanned ECG image.
-
-        Args:
-            image_path (str): Path to the scanned image.
-
-        Returns:
-            Tuple[torch.Tensor, np.ndarray]: A tuple containing the tensor
-                of shape ``(1, 12, 500)`` and raw signal array of shape ``(12, 500)``.
-
-        Raises:
-            SignalProcessingError: If optical extraction fails.
-            InvalidLeadCountError: If incorrect number of leads extracted.
-            SignalLengthMismatchError: If the expected length doesn't match.
-        """
-        # 1. Remove pink grid
+        """Run the full optical pipeline on a scanned ECG image."""
+        # 1. Remove grid adaptively
         binary_img: np.ndarray = self._remover.remove_grid(image_path)
         
         if diagnostic_mode:
@@ -288,16 +277,17 @@ class ECGPreprocessor:
             'III', 'aVF', 'V3', 'V6',
         ]
         signals_list: List[np.ndarray] = []
-        lead_name: str
         coverages: Dict[str, float] = {}
         span_failures: Dict[str, bool] = {}
         import os
+        
         for lead_name in lead_order:
             lead_img: np.ndarray | None = lead_images.get(lead_name)
             if lead_img is None:
                 raise SignalProcessingError(
                     f"Lead {lead_name} not found in sliced image"
                 )
+            
             signal_1d: Optional[np.ndarray]
             cov: float
             span_failed: bool
@@ -318,6 +308,7 @@ class ECGPreprocessor:
             lead for lead in lead_order 
             if coverages[lead] < 0.90 or span_failures[lead]
         ]
+        
         if failed_leads:
             raise ECGExtractionError(
                 "This ECG image could not be read reliably.",
