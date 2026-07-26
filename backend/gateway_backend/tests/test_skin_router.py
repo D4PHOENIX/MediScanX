@@ -116,3 +116,26 @@ async def test_skin_predict_upstream_error(auth_headers):
     data = response.json()
     assert data.get("error") is True
     assert data.get("type") == "ServiceUnavailableError"
+
+@pytest.mark.asyncio
+async def test_skin_persists_expected_modality(auth_headers) -> None:
+    from unittest.mock import patch
+    mock_client = AsyncMock()
+    mock_response = MagicMock(spec=Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"predictions": []}
+    mock_client.post.return_value = mock_response
+    app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    
+    with patch("app.api.skin_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.skin_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage:
+        mock_storage.return_value = ("url", "path")
+        response = client.post("/api/v1/skin/predict", headers=auth_headers,
+            files={"file": ("skin.jpg", b"data", "image/jpeg")},
+        )
+        assert response.status_code == 200
+        assert mock_insert.called
+        kwargs = mock_insert.call_args.kwargs
+        assert kwargs["modality"] == "skin"
+        assert kwargs["scan_type"] == 2

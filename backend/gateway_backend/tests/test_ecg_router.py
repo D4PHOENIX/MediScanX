@@ -153,3 +153,36 @@ async def test_ecg_predict_422_forwarding(auth_headers):
     assert data.get("error") == "digitization_failed"
     assert data.get("leads_failed") == ["I"]
     assert data.get("coverage") == {"I": 0.1}
+
+@pytest.mark.asyncio
+async def test_ecg_persists_expected_modality(auth_headers) -> None:
+    from unittest.mock import patch
+    mock_client = AsyncMock()
+    mock_response = MagicMock(spec=Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"predictions": []}
+    mock_client.post.return_value = mock_response
+    app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    
+    with patch("app.api.ecg_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.ecg_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage:
+        mock_storage.return_value = ("url", "path")
+        
+        # 1) Image path
+        response_img = client.post("/api/v1/ecg/predict", headers=auth_headers,
+            files={"file": ("ecg.jpg", b"data", "image/jpeg")},
+        )
+        assert response_img.status_code == 200
+        
+        # 2) WFDB path
+        response_wfdb = client.post("/api/v1/ecg/predict", headers=auth_headers,
+            files={"file": ("ecg.csv", b"data", "text/csv")},
+        )
+        assert response_wfdb.status_code == 200
+        
+        assert mock_insert.call_count == 2
+        for call_args in mock_insert.call_args_list:
+            kwargs = call_args.kwargs
+            assert kwargs["modality"] == "ecg"
+            assert kwargs["scan_type"] == 0
