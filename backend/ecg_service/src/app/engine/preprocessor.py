@@ -1,6 +1,7 @@
 """Dual-input ECG preprocessing pipeline."""
 
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional
 
@@ -206,6 +207,21 @@ class ECGPreprocessor:
         self._slicer: _ECGGridSlicer = _ECGGridSlicer(cfg)
         self._digitizer: _WaveformDigitizer = _WaveformDigitizer(cfg)
 
+    def _write_diagnostic(self, relative_name: str, payload: np.ndarray) -> None:
+        """Helper to write diagnostic files without propagating exceptions."""
+        if getattr(self, '_diagnostics_failed', False):
+            return
+        try:
+            os.makedirs(self.cfg.ecg_diagnostic_dir, exist_ok=True)
+            out_path = os.path.join(self.cfg.ecg_diagnostic_dir, relative_name)
+            if out_path.endswith('.npy'):
+                np.save(out_path, payload)
+            else:
+                cv2.imwrite(out_path, payload)
+        except Exception as exc:
+            logger.warning(f"Failed to write diagnostic file {relative_name}: {exc}")
+            self._diagnostics_failed = True
+
     def process_wfdb(self, file_path: str) -> Tuple[torch.Tensor, np.ndarray]:
         """Read a WFDB ``.dat`` / ``.hea`` pair and normalise.
 
@@ -255,7 +271,7 @@ class ECGPreprocessor:
         tensor: torch.Tensor = torch.tensor(signals_2d, dtype=torch.float32).unsqueeze(0)
         return tensor, signals_2d
 
-    def process_image(self, image_path: str, diagnostic_mode: bool = False, diagnostic_out_dir: str = "/app/data/ecg_diagnostics") -> Tuple[torch.Tensor, np.ndarray]:
+    def process_image(self, image_path: str, diagnostic_mode: bool = False) -> Tuple[torch.Tensor, np.ndarray]:
         """Run the full optical pipeline on a scanned ECG image.
 
         Args:
@@ -270,13 +286,14 @@ class ECGPreprocessor:
             InvalidLeadCountError: If incorrect number of leads extracted.
             SignalLengthMismatchError: If the expected length doesn't match.
         """
+        eff_diagnostic_mode = diagnostic_mode or self.cfg.ecg_diagnostic_mode
+        self._diagnostics_failed = False
+
         # 1. Remove pink grid
         binary_img: np.ndarray = self._remover.remove_grid(image_path)
         
-        if diagnostic_mode:
-            import os
-            os.makedirs(diagnostic_out_dir, exist_ok=True)
-            cv2.imwrite(os.path.join(diagnostic_out_dir, "grid_removed.png"), binary_img)
+        if eff_diagnostic_mode:
+            self._write_diagnostic("grid_removed.png", binary_img)
 
         # 2. Slice into 12 lead images
         lead_images: Dict[str, np.ndarray] = self._slicer.slice_image(binary_img)
@@ -291,7 +308,6 @@ class ECGPreprocessor:
         lead_name: str
         coverages: Dict[str, float] = {}
         span_failures: Dict[str, bool] = {}
-        import os
         for lead_name in lead_order:
             lead_img: np.ndarray | None = lead_images.get(lead_name)
             if lead_img is None:
@@ -309,10 +325,10 @@ class ECGPreprocessor:
             coverages[lead_name] = cov
             span_failures[lead_name] = span_failed
             
-            if diagnostic_mode:
-                cv2.imwrite(os.path.join(diagnostic_out_dir, f"lead_{lead_name}.png"), lead_img)
+            if eff_diagnostic_mode:
+                self._write_diagnostic(f"lead_{lead_name}.png", lead_img)
                 if signal_1d is not None:
-                    np.save(os.path.join(diagnostic_out_dir, f"signal_{lead_name}.npy"), signal_1d)
+                    self._write_diagnostic(f"signal_{lead_name}.npy", signal_1d)
             
         failed_leads = [
             lead for lead in lead_order 
