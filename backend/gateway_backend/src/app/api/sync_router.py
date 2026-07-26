@@ -39,6 +39,7 @@ from app.utils.validation_utils import _validate_uuid
 from app.models.schemas import ScanAlreadySyncedResponse, ScanSyncResponse
 from app.services.scan_persistence_service import ScanPersistenceService
 from app.services.storage_service import StorageService
+from app.models.domain import ScanModality
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -103,6 +104,10 @@ async def sync_edge_inference(
     metadata: str = Form(
         "{}",
         description="Full TFLite inference JSON payload (serialised as a string).",
+    ),
+    modality: Optional[str] = Form(
+        None,
+        description="Modality of the scan: 'cxr', 'ecg', or 'skin'.",
     ),
     # Auth
     auth_user_id: str = Depends(get_current_user),
@@ -183,6 +188,13 @@ async def sync_edge_inference(
             detail=f"metadata is not valid JSON: {exc}",
         ) from exc
 
+    derived_modality = modality or metadata_dict.get("modality")
+    if not derived_modality or derived_modality not in [m.value for m in ScanModality]:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="modality could not be determined from the request.",
+        )
+
     # Annotate the metadata with inference context for auditability
     metadata_dict.setdefault("inference_source", "edge")
     metadata_dict.setdefault("tflite_sync", True)
@@ -257,6 +269,7 @@ async def sync_edge_inference(
         metadata=metadata_dict,
         inference_source="edge",
         storage_path=storage_path,
+        modality=derived_modality,
     )
 
     #

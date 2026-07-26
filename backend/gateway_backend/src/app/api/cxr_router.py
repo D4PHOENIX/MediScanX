@@ -23,6 +23,7 @@ from app.core.security import get_current_user
 from app.utils.attribution_utils import resolve_attribution
 from app.services.scan_persistence_service import ScanPersistenceService
 from app.services.storage_service import StorageService
+from app.models.domain import ScanModality
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +161,7 @@ async def cxr_predict(
                 metadata=ml_result,
                 inference_source="cloud",
                 storage_path=storage_path,
+                modality=ScanModality.CXR.value,
             )
         except Exception as exc:
             import logging

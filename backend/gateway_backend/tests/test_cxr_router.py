@@ -36,6 +36,30 @@ async def test_cxr_stream_proxying(auth_headers) -> None:
     assert response.json() == {"predictions": [{"label": "Pneumonia", "probability": 0.95}]}
 
 @pytest.mark.asyncio
+async def test_cxr_persists_expected_modality(auth_headers) -> None:
+    from unittest.mock import patch
+    mock_client = AsyncMock()
+    mock_response = MagicMock(spec=Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"predictions": []}
+    mock_client.post.return_value = mock_response
+    app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    
+    with patch("app.api.cxr_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.cxr_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage:
+        mock_storage.return_value = ("url", "path")
+        response = client.post("/api/v1/cxr/predict", headers=auth_headers,
+            files={"file": ("xray.jpg", b"data", "image/jpeg")},
+            data={"top_k": 3},
+        )
+        assert response.status_code == 200
+        assert mock_insert.called
+        kwargs = mock_insert.call_args.kwargs
+        assert kwargs["modality"] == "cxr"
+        assert kwargs["scan_type"] == 1
+
+@pytest.mark.asyncio
 async def test_upload_size_guard_returns_413(auth_headers) -> None:
     """Assert that files exceeding max_upload_bytes are rejected with HTTP 413."""
     from app.core.config import gateway_config

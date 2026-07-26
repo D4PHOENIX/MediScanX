@@ -43,7 +43,8 @@ async def test_sync_edge_inference_valid(mock_storage, mock_db_insert, auth_head
             "scan_status": 2,
             "ai_diagnosis": "Pneumonia",
             "confidence": 0.95,
-            "metadata": json.dumps(metadata_payload)
+            "metadata": json.dumps(metadata_payload),
+            "modality": "cxr",
         },
         files={"file": ("scan.jpg", b"fake_image_data", "image/jpeg")}
     )
@@ -61,6 +62,29 @@ async def test_sync_edge_inference_valid(mock_storage, mock_db_insert, auth_head
     called_kwargs = mock_db_insert.call_args.kwargs
     assert called_kwargs["metadata"]["inference_source"] == "edge"
     assert called_kwargs["metadata"]["tflite_sync"] is True
+    assert called_kwargs["modality"] == "cxr"
+    assert called_kwargs["scan_type"] == 1
+
+@pytest.mark.asyncio
+async def test_sync_edge_inference_missing_modality_rejected(auth_headers) -> None:
+    """Test syncing a scan without modality returns 422."""
+    scan_id = str(uuid.uuid4())
+    
+    response = client.post("/api/v1/sync/edge-inference", headers=auth_headers,
+        data={
+            "scan_id": scan_id,
+            "patient_id": VALID_USER_ID,
+            "scan_type": 1,
+            "scan_status": 2,
+            "ai_diagnosis": "Pneumonia",
+            "confidence": 0.95,
+            "metadata": "{}"
+        },
+        files={"file": ("scan.jpg", b"fake_image_data", "image/jpeg")}
+    )
+    
+    assert response.status_code == 422
+    assert "modality" in response.text
 
 @pytest.mark.asyncio
 async def test_sync_edge_inference_already_synced(mock_storage, mock_db_insert, auth_headers) -> None:
@@ -79,7 +103,8 @@ async def test_sync_edge_inference_already_synced(mock_storage, mock_db_insert, 
             "scan_status": 0,
             "ai_diagnosis": "Normal",
             "confidence": 0.99,
-            "metadata": "{}"
+            "metadata": "{}",
+            "modality": "ecg",
         },
         files={"file": ("scan.jpg", b"fake_image_data", "image/jpeg")}
     )
@@ -146,4 +171,80 @@ async def test_sync_edge_inference_invalid_scan_type(auth_headers) -> None:
         files={"file": ("scan.jpg", b"fake_image_data", "image/jpeg")}
     )
     
+    assert response.status_code == 422
+
+@pytest.mark.asyncio
+async def test_scan_type_unchanged_by_modality_write(auth_headers) -> None:
+    """Assert scan_type round-trips through every route with its input value untouched."""
+    scan_id = str(uuid.uuid4())
+    app.state.db_pool = AsyncMock()
+    app.state.supabase_client = AsyncMock()
+    app.state.http_client = AsyncMock()
+    with patch("app.api.sync_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.sync_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage:
+        mock_storage.return_value = ("url", "path")
+        mock_insert.return_value = True
+        
+        response = client.post("/api/v1/sync/edge-inference", headers=auth_headers,
+            data={
+                "scan_id": scan_id,
+                "patient_id": VALID_USER_ID,
+                "scan_type": 1,
+                "scan_status": 2,
+                "ai_diagnosis": "Pneumonia",
+                "confidence": 0.95,
+                "metadata": "{}",
+                "modality": "cxr"
+            },
+            files={"file": ("scan.jpg", b"fake", "image/jpeg")}
+        )
+        assert response.status_code == 200
+        kwargs = mock_insert.call_args.kwargs
+        assert kwargs["scan_type"] == 1
+
+@pytest.mark.asyncio
+async def test_sync_modality_form_takes_precedence_over_metadata(auth_headers) -> None:
+    scan_id = str(uuid.uuid4())
+    app.state.db_pool = AsyncMock()
+    app.state.supabase_client = AsyncMock()
+    app.state.http_client = AsyncMock()
+    with patch("app.api.sync_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.sync_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage:
+        mock_storage.return_value = ("url", "path")
+        mock_insert.return_value = True
+        
+        metadata_payload = json.dumps({"modality": "ecg"})
+        response = client.post("/api/v1/sync/edge-inference", headers=auth_headers,
+            data={
+                "scan_id": scan_id,
+                "patient_id": VALID_USER_ID,
+                "scan_type": 1,
+                "scan_status": 2,
+                "ai_diagnosis": "Pneumonia",
+                "confidence": 0.95,
+                "metadata": metadata_payload,
+                "modality": "cxr"
+            },
+            files={"file": ("scan.jpg", b"fake", "image/jpeg")}
+        )
+        assert response.status_code == 200
+        kwargs = mock_insert.call_args.kwargs
+        assert kwargs["modality"] == "cxr"
+
+@pytest.mark.asyncio
+async def test_sync_invalid_modality_in_metadata_rejected(auth_headers) -> None:
+    scan_id = str(uuid.uuid4())
+    metadata_payload = json.dumps({"modality": "xray"})
+    response = client.post("/api/v1/sync/edge-inference", headers=auth_headers,
+        data={
+            "scan_id": scan_id,
+            "patient_id": VALID_USER_ID,
+            "scan_type": 1,
+            "scan_status": 2,
+            "ai_diagnosis": "Pneumonia",
+            "confidence": 0.95,
+            "metadata": metadata_payload
+        },
+        files={"file": ("scan.jpg", b"fake", "image/jpeg")}
+    )
     assert response.status_code == 422
