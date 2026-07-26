@@ -19,3 +19,13 @@ class ModalityType(str, Enum):
     CXR = "CXR"
     ECG = "ECG"
     SKIN = "SKIN"
+
+class ScanModality(str, Enum):
+    """Database-aligned enumeration for scan modality values.
+    
+    Used to set the 'modality' column in scan_results.
+    """
+    
+    CXR = "cxr"
+    ECG = "ecg"
+    SKIN = "skin"
