@@ -81,7 +81,7 @@ services:
             - ECG_CKPT_PATH=${ECG_CKPT_PATH:-/weights/ecg_v2_12lead.ckpt}
         volumes:
             - ./ecg_service/weights:/weights
-            - ./ecg_service/data/diagnostics:/app/data/ecg_diagnostics
+            - ecg_diagnostics_vol:/app/data/ecg_diagnostics
         networks:
             - mediscanx-net
 
@@ -115,3 +115,6 @@ services:
 networks:
     mediscanx-net:
         driver: bridge
+
+volumes:
+    ecg_diagnostics_vol:
