@@ -61,6 +61,7 @@ class ScanPersistenceService:
         findings: str = "",
         metadata: Optional[Dict[str, Any]] = None,
         storage_path: Optional[str] = None,
+        modality: Optional[str] = None,
     ) -> bool:
         """Inserts a single scan result row into the ``scan_results`` table.
 
@@ -109,6 +110,7 @@ class ScanPersistenceService:
                 metadata,
                 inference_source,
                 storage_path,
+                modality,
                 scan_date
             ) VALUES (
                 $1::uuid,
@@ -123,6 +125,7 @@ class ScanPersistenceService:
                 $10::jsonb,
                 $11,
                 $12,
+                $13,
                 timezone('utc'::text, now())
             )
             ON CONFLICT (scan_id) DO NOTHING
@@ -143,6 +146,7 @@ class ScanPersistenceService:
                 metadata_json,
                 inference_source,
                 storage_path,
+                modality,
             )
 
         # asyncpg returns a string like "INSERT 0 1" or "INSERT 0 0"
