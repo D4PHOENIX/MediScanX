@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     or a ``.env`` file using pydantic-settings.
     """
 
-    # ── Model Paths ──────────────────────────────────────────────────────────
+    # Model Paths 
     onnx_model_path: str = Field(default="/models/ecg_v2_12lead.onnx", alias="ECG_ONNX_PATH")
     pytorch_ckpt_path: str = Field(default="/models/ecg_v2_12lead.ckpt", alias="ECG_CKPT_PATH")
 
@@ -26,23 +26,23 @@ class Settings(BaseSettings):
     ecg_onnx_path: str = Field(default="/models/ecg_v2_12lead.onnx")
     ecg_ckpt_path: str = Field(default="/models/ecg_v2_12lead.ckpt")
 
-    # ── Architecture Constants ───────────────────────────────────────────────
+    # Architecture Constants
     num_leads: int = 12
     seq_length: int = 500
     num_classes: int = 5
     ecg_labels: List[str] = Field(default_factory=lambda: ["NORM", "MI", "STTC", "CD", "HYP"])
 
-    # ── Clinical Decision Boundaries ─────────────────────────────────────────
+    # Clinical Decision Boundaries
     classification_threshold: float = 0.5
 
-    # ── Hardware ─────────────────────────────────────────────────────────────
+    # Hardware
     device: str = "cpu"
 
     @property
     def torch_device(self) -> torch.device:
         return torch.device("cuda" if torch.cuda.is_available() else self.device)
 
-    # ── Optical Preprocessing (Paper ECG Strip → Signal) ─────────────────────
+    # Optical Preprocessing (Paper ECG Strip → Signal)
     hsv_lower_pink1: np.ndarray = Field(default_factory=lambda: np.array([0, 20, 50], dtype=np.uint8))
     hsv_upper_pink1: np.ndarray = Field(default_factory=lambda: np.array([15, 255, 255], dtype=np.uint8))
     hsv_lower_pink2: np.ndarray = Field(default_factory=lambda: np.array([160, 20, 50], dtype=np.uint8))
@@ -59,9 +59,13 @@ class Settings(BaseSettings):
         ]
     )
 
-    # ── Explainability ────────────────────────────────────────────────────────
+    # Explainability
     heatmap_alpha: float = 0.45
     colormap: str = "jet"
+
+    # Diagnostics
+    ecg_diagnostic_mode: bool = False
+    ecg_diagnostic_dir: str = "/app/data/ecg_diagnostics"
 
     model_config: SettingsConfigDict = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore", arbitrary_types_allowed=True, populate_by_name=True
