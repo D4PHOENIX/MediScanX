@@ -43,3 +43,15 @@ async def test_storage_upload_correct_bucket_and_path(auth_headers):
         file=b"fake-image-data",
         file_options={"content-type": "image/jpeg", "x-upsert": "true"}
     )
+
+@pytest.mark.asyncio
+async def test_delete_scan_objects_rejects_cross_tenant_paths():
+    mock_supabase = MagicMock()
+    
+    with pytest.raises(ValueError, match="must start with user-123/"):
+        await StorageService.delete_scan_objects(
+            supabase_client=mock_supabase,
+            bucket="test-bucket",
+            user_id="user-123",
+            object_paths=["user-123/scan-456/overlay_0.png", "other-user/scan-123/overlay_0.png"]
+        )
