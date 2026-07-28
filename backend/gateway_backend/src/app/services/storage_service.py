@@ -130,3 +130,37 @@ class StorageService:
         public_url: str = await storage_bucket.get_public_url(object_path)
         logger.info("Scan image stored at %s with path %s", public_url, object_path)
         return public_url, object_path
+
+    @staticmethod
+    async def delete_scan_objects(
+        supabase_client: SupabaseAsyncClient,
+        bucket: str,
+        user_id: str,
+        object_paths: list[str],
+    ) -> None:
+        """Deletes multiple objects from Supabase Storage.
+
+        Args:
+            supabase_client: The shared ``supabase.AsyncClient``.
+            bucket: Target storage bucket name.
+            user_id: The authenticated user's UUID — used to enforce tenant isolation.
+            object_paths: A list of object paths to remove.
+            
+        Raises:
+            ValueError: If any path does not start with the caller's user_id.
+            RuntimeError: If the storage removal fails.
+        """
+        if not object_paths:
+            return
+
+        for path in object_paths:
+            if not path.startswith(f"{user_id}/"):
+                raise ValueError(f"object_path {path} must start with {user_id}/ to enforce tenant isolation")
+
+        try:
+            storage_bucket = supabase_client.storage.from_(bucket)
+            await storage_bucket.remove(object_paths)
+            logger.info("Deleted orphaned scan objects: %s", object_paths)
+        except Exception as exc:
+            logger.error("Supabase Storage removal failed for objects %s: %s", object_paths, exc)
+            raise RuntimeError(f"Storage removal failed: {exc}") from exc
