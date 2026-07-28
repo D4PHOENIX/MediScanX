@@ -67,6 +67,7 @@ class StorageService:
         scan_id: str,
         file_bytes: bytes,
         content_type: Optional[str] = None,
+        object_path: Optional[str] = None,
     ) -> tuple[str, str]:
         """Uploads a scan image to Supabase Storage and returns its public URL and object path.
 
@@ -97,7 +98,10 @@ class StorageService:
             )
             resolved_content_type = "image/png"
 
-        object_path = StorageService._build_object_path(user_id, scan_id, resolved_content_type)
+        if object_path is None:
+            object_path = StorageService._build_object_path(user_id, scan_id, resolved_content_type)
+        elif not object_path.startswith(f"{user_id}/"):
+            raise ValueError(f"object_path override must start with {user_id}/ to enforce tenant isolation")
 
         try:
             storage_bucket = supabase_client.storage.from_(bucket)
