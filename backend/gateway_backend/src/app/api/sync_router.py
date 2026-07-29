@@ -120,20 +120,20 @@ async def sync_edge_inference(
 
     The endpoint is **fully idempotent**: submitting the same ``scan_id`` twice
     returns a 409 rather than creating a duplicate row.  The mobile client must
-    treat both 200 and 409 as "success" conditions and clear the local queue entry.
+    treat both 200 and 409 as \"success\" conditions and clear the local queue entry.
 
     Args:
         request (Request): FastAPI request context carrying ``app.state``.
         file (UploadFile): The scan image binary.
         scan_id (str): Client-generated UUID for this scan.
-        user_id (str): Patient UUID — cross-validated against the JWT.
+        patient_id (Optional[str]): Patient UUID — cross-validated against the JWT.
         scan_type (int): Modality integer (0/1/2).
         scan_status (int): Severity integer (0/1/2).
         ai_diagnosis (str): TFLite top-1 class label.
         confidence (float): TFLite top-1 confidence in [0.0, 1.0].
-        doctor_id (Optional[str]): Doctor UUID; may be None.
         findings (str): Free-text findings; may be empty.
         metadata (str): Full TFLite JSON payload serialised as a string.
+        modality (Optional[str]): Modality string ('cxr', 'ecg', 'skin').
         auth_user_id (str): JWT-derived user ID injected by ``get_current_user``.
 
     Returns:
@@ -142,11 +142,11 @@ async def sync_edge_inference(
 
     Raises:
         HTTPException 401: Missing or invalid JWT.
-        HTTPException 403: ``user_id`` does not match JWT ``sub``.
+        HTTPException 403: ``patient_id`` does not match JWT ``sub``.
         HTTPException 413: File exceeds the upload size limit.
         HTTPException 422: Malformed UUID, invalid scan_type/scan_status, or
             unparseable metadata JSON.
-        HTTPException 503: Database pool unavailable (DATABASE_URL not configured).
+        HTTPException 503: Database pool unavailable or storage upload failed.
     """
     #
     # 1. Input validation
@@ -228,10 +228,50 @@ async def sync_edge_inference(
         )
 
     #
-    # 4. Upload image to Supabase Storage
+    # Step 1 — duplicate pre-check.
+    # SELECT scan_id, storage_path, user_id FROM scan_results WHERE scan_id = :scan_id
     #
-    http_client = request.app.state.http_client
-    image_url: str = ""
+    async with db_pool.acquire() as conn:
+        existing = await conn.fetchrow(
+            "SELECT scan_id, storage_path, user_id FROM scan_results WHERE scan_id = $1::uuid",
+            scan_id,
+        )
+
+    if existing is not None:
+        if str(existing["user_id"]) != final_user_id:
+            # Foreign row: do not touch storage, do not insert, do not leak existing info.
+            return JSONResponse(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                content={"error": True, "code": "scan_id_conflict", "detail": "scan_id belongs to another user."},
+            )
+
+        existing_storage_path = existing["storage_path"]
+        if existing_storage_path:
+            # Row exists with a non-null storage_path → already fully synced.
+            # Do not touch storage. Return 409 with the existing path.
+            return JSONResponse(
+                status_code=status.HTTP_409_CONFLICT,
+                content={
+                    "status": "already_synced",
+                    "scan_id": scan_id,
+                    "storage_path": existing_storage_path,
+                },
+            )
+        # Row exists with null/empty storage_path → legacy partial.
+        # Continue to upload; step 3 will UPDATE instead of INSERT.
+        _is_partial_row = True
+    else:
+        _is_partial_row = False
+
+    #
+    # Step 2 — upload, then verify.
+    # Upload the file; verify the returned object_path is non-empty.
+    # StorageService.upload_scan_image returns (public_url, object_path).
+    # On SDK failure it raises RuntimeError. A falsy object_path is treated
+    # as a failed upload even if no exception was raised.
+    #
+    image_url: str
+    storage_path: str
 
     try:
         image_url, storage_path = await StorageService.upload_scan_image(
@@ -243,53 +283,173 @@ async def sync_edge_inference(
             content_type=file.content_type,
         )
     except RuntimeError as exc:
-        # Storage failure is non-fatal for the sync — the row is still written
-        # with an empty image_url.  The client is notified via the response.
         logger.error(
-            "Storage upload failed for edge scan_id=%s: %s. Proceeding with empty image_url.",
+            "Storage upload raised for edge scan_id=%s user_id=%s: %s",
             scan_id,
+            final_user_id,
             exc,
         )
-        storage_path = None
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"error": True, "code": "storage_upload_failed", "detail": str(exc)},
+        )
+
+    if not storage_path:
+        # Upload returned without raising but produced no usable object path.
+        logger.error(
+            "Storage upload returned falsy object_path for edge scan_id=%s user_id=%s",
+            scan_id,
+            final_user_id,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"error": True, "code": "storage_upload_failed", "detail": "Storage returned no object path"},
+        )
+
+    # The storage service returns an absolute URL with /object/public/ which we need
+    # to convert to /object/authenticated/ to match what the cloud write paths persist.
+    authenticated_image_url = image_url.replace("/object/public/", "/object/authenticated/")
 
     #
-    # 5. Insert into scan_results (idempotent)
+    # Step 3 — insert (or update partial row).
+    # INSERT ... ON CONFLICT (scan_id) DO NOTHING RETURNING scan_id.
+    # storage_path and image_url come from the verified upload, never from client input.
     #
-    was_inserted: bool = await ScanPersistenceService.insert_scan_result(
-        pool=db_pool,
-        scan_id=scan_id,
-        user_id=final_user_id,
-        doctor_id=final_doctor_id,
-        scan_type=scan_type,
-        scan_status=scan_status,
-        image_url=image_url,
-        ai_diagnosis=ai_diagnosis,
-        confidence=confidence,
-        findings=findings,
-        metadata=metadata_dict,
-        inference_source="edge",
-        storage_path=storage_path,
-        modality=derived_modality,
-    )
+    if _is_partial_row:
+        # Legacy partial row: update the storage fields where storage_path IS NULL.
+        # This path has its own exception handler that must NOT issue a compensating
+        # delete — the uploaded object belongs to the pre-existing row and deleting
+        # it would reproduce B26 against a record that is already live.
+        try:
+            async with db_pool.acquire() as conn:
+                updated = await conn.fetchrow(
+                    """
+                    UPDATE scan_results
+                    SET storage_path = $1, image_url = $2
+                    WHERE scan_id = $3::uuid AND user_id = $4::uuid AND storage_path IS NULL
+                    RETURNING scan_id
+                    """,
+                    storage_path,
+                    authenticated_image_url,
+                    scan_id,
+                    final_user_id,
+                )
+        except Exception as exc:
+            logger.error(
+                "Database update failed for partial edge row scan_id=%s user_id=%s: %s",
+                scan_id,
+                final_user_id,
+                exc,
+            )
+            # Do NOT delete storage_path here — the object belongs to the pre-existing row.
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={"error": True, "code": "sync_write_failed", "detail": str(exc)},
+            )
+        # Whether we updated or another concurrent request beat us, return 409.
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={
+                "status": "already_synced",
+                "scan_id": scan_id,
+                "storage_path": storage_path,
+            },
+        )
+
+    try:
+        was_inserted: bool = await ScanPersistenceService.insert_scan_result(
+            pool=db_pool,
+            scan_id=scan_id,
+            user_id=final_user_id,
+            doctor_id=final_doctor_id,
+            scan_type=scan_type,
+            scan_status=scan_status,
+            image_url=authenticated_image_url,
+            ai_diagnosis=ai_diagnosis,
+            confidence=confidence,
+            findings=findings,
+            metadata=metadata_dict,
+            inference_source="edge",
+            storage_path=storage_path,
+            modality=derived_modality,
+        )
+    except Exception as exc:
+        logger.error(
+            "Database insert failed for edge scan_id=%s user_id=%s: %s",
+            scan_id,
+            final_user_id,
+            exc,
+        )
+        # Compensating delete: remove the object we just uploaded so it does not
+        # become a permanent orphan.  A lost race (zero-rows / ON CONFLICT) is NOT
+        # an exception and is not handled here — the winning row owns the object.
+        try:
+            await StorageService.delete_scan_objects(
+                supabase_client=request.app.state.supabase_client,
+                bucket=gateway_config.supabase_storage_bucket,
+                user_id=final_user_id,
+                object_paths=[storage_path],
+            )
+        except Exception as cleanup_exc:
+            logger.error(
+                "Compensating delete failed after insert failure — orphaned objects: %s (cleanup error: %s)",
+                [storage_path],
+                cleanup_exc,
+            )
+
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"error": True, "code": "sync_write_failed", "detail": str(exc)},
+        )
 
     #
-    # 6. Return appropriate response
+    # Step 3 outcomes
     #
     if was_inserted:
         return JSONResponse(
             status_code=status.HTTP_200_OK,
-            content=ScanSyncResponse(
-                status="synced",
-                scan_id=scan_id,
-                image_url=image_url,
-            ).model_dump(),
+            content={
+                "status": "synced",
+                "scan_id": scan_id,
+                "image_url": authenticated_image_url,
+                "storage_path": storage_path,
+            },
         )
 
-    # Conflict: scan already exists.  Client should still clear its local queue.
+    # ON CONFLICT fired — a concurrent request inserted the row first.
+    # Re-read the conflicting row to check ownership.
+    async with db_pool.acquire() as conn:
+        conflicting_row = await conn.fetchrow(
+            "SELECT user_id, storage_path FROM scan_results WHERE scan_id = $1::uuid",
+            scan_id,
+        )
+
+    if conflicting_row and str(conflicting_row["user_id"]) != final_user_id:
+        if conflicting_row["storage_path"] != storage_path:
+            try:
+                await StorageService.delete_scan_objects(
+                    supabase_client=request.app.state.supabase_client,
+                    bucket=gateway_config.supabase_storage_bucket,
+                    user_id=final_user_id,
+                    object_paths=[storage_path],
+                )
+            except Exception as cleanup_exc:
+                logger.error(
+                    "Compensating delete failed for foreign conflict orphaned object: %s",
+                    cleanup_exc,
+                )
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={"error": True, "code": "scan_id_conflict", "detail": "scan_id claimed by another user during sync."},
+        )
+
+    # The winning row belongs to the caller and points at the same deterministic object path.
+    # Do NOT delete the object here.
     return JSONResponse(
         status_code=status.HTTP_409_CONFLICT,
-        content=ScanAlreadySyncedResponse(
-            status="already_synced",
-            scan_id=scan_id,
-        ).model_dump(),
+        content={
+            "status": "already_synced",
+            "scan_id": scan_id,
+            "storage_path": storage_path,
+        },
     )

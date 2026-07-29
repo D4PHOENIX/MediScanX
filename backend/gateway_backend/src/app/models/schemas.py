@@ -132,7 +132,8 @@ class ScanSyncResponse(BaseModel):
 
     status: str = Field("synced", description='Always "synced" on first insert.')
     scan_id: str = Field(..., description="UUID of the persisted scan.")
-    image_url: str = Field(..., description="Public URL of the uploaded scan image.")
+    image_url: str = Field(..., description="Authenticated URL of the uploaded scan image.")
+    storage_path: str = Field(..., description="Object path within the storage bucket.")
 
 
 class ScanAlreadySyncedResponse(BaseModel):
@@ -149,6 +150,7 @@ class ScanAlreadySyncedResponse(BaseModel):
 
     status: str = Field("already_synced", description='Always "already_synced" on conflict.')
     scan_id: str = Field(..., description="UUID that already existed in scan_results.")
+    storage_path: str = Field(..., description="Object path within the storage bucket.")
 
 
 class ReferralRequest(BaseModel):
