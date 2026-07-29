@@ -45,6 +45,7 @@ async def test_cxr_persists_expected_modality(auth_headers) -> None:
     mock_client.post.return_value = mock_response
     app.state.http_client = mock_client
     app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
     
     with patch("app.api.cxr_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
          patch("app.api.cxr_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage:
@@ -108,3 +109,278 @@ async def test_upstream_service_error_envelope(auth_headers) -> None:
     assert data.get("type") == "ServiceUnavailableError"
     assert "Service unavailable" in data.get("message", "")
     assert "context" in data
+
+@pytest.fixture
+def fake_ml_data():
+    import base64
+    fake_b64 = base64.b64encode(b"fake_image_data_for_overlay_1234567890").decode("utf-8")
+    return {
+        "predicted_diagnoses": ["Pneumonia"],
+        "original_img": "data:image/png;base64," + fake_b64,
+        "top_findings": [
+            {
+                "label": "Infiltrate",
+                "confidence": 0.90,
+                "class_idx": 4,
+                "abbreviation": "INF",
+                "overlay_img": fake_b64
+            },
+            {
+                "label": "Effusion",
+                "confidence": 0.85,
+                "class_idx": 2,
+                "abbreviation": "EFF"
+            }
+        ]
+    }
+
+@pytest.mark.asyncio
+async def test_cxr_overlay_objects_land_in_expected_path(auth_headers, fake_ml_data) -> None:
+    from unittest.mock import patch
+    
+    mock_client = AsyncMock()
+    mock_response = MagicMock(spec=Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = fake_ml_data
+    mock_client.post.return_value = mock_response
+    app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
+    
+    with patch("app.api.cxr_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.cxr_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage, \
+         patch("app.api.cxr_router.StorageService.delete_scan_objects", new_callable=AsyncMock) as mock_delete:
+        
+        mock_storage.side_effect = [
+            ("url_overlay", "user123/scan456/overlay_0.png"),
+            ("url_main", "user123/scan456.png")
+        ]
+        
+        client.post("/api/v1/cxr/predict", headers=auth_headers,
+            files={"file": ("xray.jpg", b"data", "image/jpeg")},
+            data={"top_k": 3},
+        )
+        
+        overlay_call_kwargs = mock_storage.call_args_list[0].kwargs
+        kwargs = mock_insert.call_args.kwargs
+        expected_user_id = kwargs["user_id"]
+        expected_scan_id = kwargs["scan_id"]
+        assert overlay_call_kwargs["object_path"] == f"{expected_user_id}/{expected_scan_id}/overlay_0.png"
+        assert kwargs["xai_status"] == "generated"
+        assert kwargs["xai_path"] == "user123/scan456/overlay_0.png"
+        assert mock_delete.call_count == 0
+
+@pytest.mark.asyncio
+async def test_cxr_compensating_delete_on_persistence_failure(auth_headers, fake_ml_data) -> None:
+    from unittest.mock import patch
+    import pytest
+    
+    mock_client = AsyncMock()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = fake_ml_data
+    mock_client.post.return_value = mock_response
+    app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
+    
+    with patch("app.api.cxr_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.cxr_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_upload, \
+         patch("app.api.cxr_router.StorageService.delete_scan_objects", new_callable=AsyncMock) as mock_delete:
+         
+        mock_upload.side_effect = [
+            ("url_overlay", "user123/scan456/overlay_0.png"),
+            ("url_main", "user123/scan456.png")
+        ]
+        
+        mock_insert.side_effect = RuntimeError("Database is down")
+        
+        with pytest.raises(RuntimeError, match="Database is down"):
+            client.post("/api/v1/cxr/predict", headers=auth_headers,
+                files={"file": ("xray.jpg", b"data", "image/jpeg")},
+                data={"top_k": 3},
+            )
+            
+        assert mock_delete.call_count == 1
+        deleted_paths = mock_delete.call_args.kwargs["object_paths"]
+        assert deleted_paths == ["user123/scan456/overlay_0.png"]
+
+@pytest.mark.asyncio
+async def test_cxr_compensating_delete_failure_propagates_original_exception(auth_headers, fake_ml_data) -> None:
+    from unittest.mock import patch
+    import pytest
+    
+    mock_client = AsyncMock()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = fake_ml_data
+    mock_client.post.return_value = mock_response
+    app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
+    
+    with patch("app.api.cxr_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.cxr_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_upload, \
+         patch("app.api.cxr_router.StorageService.delete_scan_objects", new_callable=AsyncMock) as mock_delete:
+         
+        mock_upload.side_effect = [
+            ("url_overlay", "user123/scan456/overlay_0.png"),
+            ("url_main", "user123/scan456.png")
+        ]
+        
+        mock_insert.side_effect = RuntimeError("Database is down")
+        mock_delete.side_effect = RuntimeError("Storage cleanup failed")
+        
+        with pytest.raises(RuntimeError, match="Database is down"):
+            client.post("/api/v1/cxr/predict", headers=auth_headers,
+                files={"file": ("xray.jpg", b"data", "image/jpeg")},
+                data={"top_k": 3},
+            )
+            
+        assert mock_delete.call_count == 1
+
+@pytest.mark.asyncio
+async def test_cxr_metadata_contains_no_large_base64_strings(auth_headers, fake_ml_data) -> None:
+    from unittest.mock import patch
+    import json
+    
+    mock_client = AsyncMock()
+    mock_response = MagicMock(spec=Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = fake_ml_data
+    mock_client.post.return_value = mock_response
+    app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
+    
+    with patch("app.api.cxr_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.cxr_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage:
+        
+        mock_storage.side_effect = [("url_o", "path_o"), ("url_m", "path_m")]
+        client.post("/api/v1/cxr/predict", headers=auth_headers,
+            files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 3},
+        )
+        
+        metadata = mock_insert.call_args.kwargs["metadata"]
+        metadata_str = json.dumps(metadata)
+        assert len(metadata_str) < 4096
+
+@pytest.mark.asyncio
+async def test_cxr_top_findings_retains_metadata_after_swap(auth_headers, fake_ml_data) -> None:
+    from unittest.mock import patch
+    
+    mock_client = AsyncMock()
+    mock_response = MagicMock(spec=Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = fake_ml_data
+    mock_client.post.return_value = mock_response
+    app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
+    
+    with patch("app.api.cxr_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.cxr_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage:
+        
+        mock_storage.side_effect = [("url_o", "path_o"), ("url_m", "path_m")]
+        client.post("/api/v1/cxr/predict", headers=auth_headers,
+            files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 3},
+        )
+        
+        metadata = mock_insert.call_args.kwargs["metadata"]
+        assert metadata["top_findings"][0]["label"] == "Infiltrate"
+        assert metadata["top_findings"][0]["confidence"] == 0.90
+        assert metadata["top_findings"][0]["class_idx"] == 4
+        assert "overlay_img" not in metadata["top_findings"][0]
+        assert "overlay_path" in metadata["top_findings"][0]
+
+@pytest.mark.asyncio
+async def test_cxr_original_img_is_absent_from_metadata(auth_headers, fake_ml_data) -> None:
+    from unittest.mock import patch
+    
+    mock_client = AsyncMock()
+    mock_response = MagicMock(spec=Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = fake_ml_data
+    mock_client.post.return_value = mock_response
+    app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
+    
+    with patch("app.api.cxr_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.cxr_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage:
+        
+        mock_storage.side_effect = [("url_o", "path_o"), ("url_m", "path_m")]
+        client.post("/api/v1/cxr/predict", headers=auth_headers,
+            files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 3},
+        )
+        
+        metadata = mock_insert.call_args.kwargs["metadata"]
+        assert "original_img" not in metadata
+
+@pytest.mark.asyncio
+async def test_cxr_overlay_upload_failure(auth_headers, fake_ml_data) -> None:
+    from unittest.mock import patch
+    
+    mock_client = AsyncMock()
+    mock_response = MagicMock(spec=Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = fake_ml_data
+    mock_client.post.return_value = mock_response
+    app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
+    
+    with patch("app.api.cxr_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.cxr_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage:
+        
+        def storage_side_effect(*args, **kwargs):
+            if "overlay" in kwargs.get("object_path", ""):
+                raise RuntimeError("Overlay upload failed")
+            return ("url_main", "user123/scan456.png")
+            
+        mock_storage.side_effect = storage_side_effect
+        
+        response = client.post("/api/v1/cxr/predict", headers=auth_headers,
+            files={"file": ("xray.jpg", b"data", "image/jpeg")},
+            data={"top_k": 3},
+        )
+        
+        assert response.status_code == 200
+        kwargs = mock_insert.call_args.kwargs
+        metadata = kwargs["metadata"]
+        assert metadata["top_findings"][0]["label"] == "Infiltrate"
+        assert metadata["xai"]["status"] == "overlay_upload_failed"
+        assert kwargs["xai_status"] == "failed"
+        assert kwargs.get("xai_path") is None
+
+@pytest.mark.asyncio
+async def test_cxr_no_overlays(auth_headers) -> None:
+    from unittest.mock import patch
+    
+    mock_client = AsyncMock()
+    mock_response = MagicMock(spec=Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "predicted_diagnoses": ["Normal"],
+        "top_findings": [{"label": "Normal", "confidence": 0.99, "class_idx": 0}]
+    }
+    mock_client.post.return_value = mock_response
+    app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
+    
+    with patch("app.api.cxr_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.cxr_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage:
+        
+        mock_storage.return_value = ("url_main", "user123/scan456.png")
+        
+        response = client.post("/api/v1/cxr/predict", headers=auth_headers,
+            files={"file": ("xray.jpg", b"data", "image/jpeg")},
+            data={"top_k": 3},
+        )
+        
+        assert response.status_code == 200
+        kwargs = mock_insert.call_args.kwargs
+        assert kwargs["xai_status"] == "none"
+        assert kwargs.get("xai_path") is None
+        assert kwargs["metadata"]["xai"]["status"] == "none"

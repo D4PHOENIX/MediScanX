@@ -186,3 +186,5 @@ async def test_ecg_persists_expected_modality(auth_headers) -> None:
             kwargs = call_args.kwargs
             assert kwargs["modality"] == "ecg"
             assert kwargs["scan_type"] == 0
+            assert kwargs.get("xai_status", "none") == "none"
+            assert kwargs.get("xai_path") is None
