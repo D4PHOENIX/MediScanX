@@ -57,6 +57,16 @@ from app.core.security import get_current_user
 from app.utils.validation_utils import _validate_uuid
 from app.models.schemas import ScanAlreadySyncedResponse, ScanSyncResponse
 from app.services.edge_sync_service import EdgeSyncService, EdgeSyncOutcome
+
+# Imported solely as test patch targets. The suite patches
+#   app.api.sync_router.StorageService.upload_scan_image
+#   app.api.sync_router.ScanPersistenceService.insert_scan_result
+# Patching a method mutates the shared class object, so EdgeSyncService's own
+# reference is mocked through these. Removing these as "unused imports" breaks
+# 18 tests at setup with AttributeError, before any test body runs.
+from app.services.scan_persistence_service import ScanPersistenceService  # noqa: F401
+from app.services.storage_service import StorageService  # noqa: F401
+
 from app.models.domain import ScanModality
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -240,14 +250,7 @@ async def sync_edge_inference(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={"error": True, "code": "sync_write_failed", "detail": result.detail},
         )
-    else:
-        logger.error(
-            "Unhandled edge sync outcome %r for scan_id=%s", result.outcome, scan_id
-        )
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"error": True, "code": "unhandled_sync_outcome"},
-        )
+
 
 @dataclass
 class ValidatedSyncRequest:
