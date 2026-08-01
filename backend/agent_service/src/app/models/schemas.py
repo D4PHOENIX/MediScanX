@@ -109,8 +109,8 @@ class SearchClinicalGuidelinesSchema(BaseModel):
 
 
 class CalculateTemporalProgressionSchema(BaseModel):
-    current_scan_id: UUID = Field(description="Identifier of the scan to be assessed.")
-    previous_scan_id: Optional[UUID] = Field(default=None, description="Identifier of a specific previous scan (optional).")
+    current_scan_id: str = Field(description="Identifier of the scan to be assessed.")
+    previous_scan_id: Optional[str] = Field(default=None, description="Identifier of a specific previous scan (optional).")
 
 
 class QueryPatientMetricsSchema(BaseModel):

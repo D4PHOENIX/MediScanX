@@ -24,13 +24,17 @@ from app.agent.tools.ml_tools import (
     run_skin_inference,
 )
 from app.agent.tools.rag_tool import search_clinical_guidelines
-from app.agent.tools.temporal import list_recent_scans
+from app.agent.tools.temporal import (
+    list_recent_scans,
+    calculate_temporal_progression,
+    query_patient_metrics,
+)
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
+# 
 #  System Prompt — MediScanX Clinical AI Persona
-# ---------------------------------------------------------------------------
+# 
 SYSTEM_PROMPT = """\
 You are the **MediScanX Clinical AI**, a specialised medical reasoning \
 assistant embedded in the MediScanX diagnostic platform.
@@ -66,6 +70,8 @@ assistant embedded in the MediScanX diagnostic platform.
 - `search_clinical_guidelines` — Use for any medical knowledge query.
 - `run_multimodal_fusion` — Use when asked to combine/compare results from different modalities.
 - `list_recent_scans` — Use to retrieve a list of the patient's recent scans and their identifiers.
+- `calculate_temporal_progression` — Use to compute progression between diagnostic results of two scans of the same modality.
+- `query_patient_metrics` — Use to retrieve profile information for a patient.
 
 ## Safety & Compliance
 - Never diagnose definitively. Frame outputs as "findings suggestive of" \
@@ -76,15 +82,17 @@ assistant embedded in the MediScanX diagnostic platform.
   as **CRITICAL** and recommend immediate clinical review.
 """
 
-# ---------------------------------------------------------------------------
+# 
 #  Tools registry
-# ---------------------------------------------------------------------------
+# 
 TOOLS: List[BaseTool] = [
     run_cxr_inference,
     run_ecg_inference,
     run_skin_inference,
     search_clinical_guidelines,
     list_recent_scans,
+    calculate_temporal_progression,
+    query_patient_metrics,
     fuse_multimodal_findings,
     orchestrate_fusion,
 ]
@@ -124,9 +132,9 @@ def _extract_citations_from_messages(messages: list) -> list[Dict[str, Any]]:
     return citations
 
 
-# ---------------------------------------------------------------------------
+# 
 #  Graph nodes
-# ---------------------------------------------------------------------------
+# 
 def _should_continue(state: AgentState) -> str:
     """Route to the tool node if the last message contains tool calls.
 
@@ -142,9 +150,9 @@ def _should_continue(state: AgentState) -> str:
     return "sync_powersync"
 
 
-# ---------------------------------------------------------------------------
+# 
 #  Factory — called once during FastAPI lifespan startup
-# ---------------------------------------------------------------------------
+# 
 @asynccontextmanager
 async def build_graph(
     gemini_api_key: Optional[str],

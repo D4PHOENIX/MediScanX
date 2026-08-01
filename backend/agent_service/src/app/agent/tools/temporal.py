@@ -1,22 +1,24 @@
-"""L2 temporal progression tool and patient metrics retrieval.
+"""Temporal progression tool and patient metrics retrieval.
 
-Provides database-backed embedding vector comparison for tracking disease
-progression over time, and tabular patient metric retrieval for clinical
-context enrichment.
+Provides database-backed comparison for tracking disease progression over time,
+and tabular patient metric retrieval for clinical context enrichment.
 """
 
-
 import logging
-import math
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional
+import uuid
+import json
 
 import asyncpg
-from asyncpg import Pool
 from langchain_core.tools import tool
-from pydantic import BaseModel, Field
 from langchain_core.runnables import RunnableConfig
-from app.models.schemas import CalculateTemporalProgressionSchema, QueryPatientMetricsSchema
-from app.utils.vector_utils import _vec_to_list
+
+from app.models.schemas import (
+    CalculateTemporalProgressionSchema,
+    QueryPatientMetricsSchema,
+    ListRecentScansSchema,
+)
+from app.agent.tools.labels import _NORMAL_LABELS, _ABNORMAL_LABELS
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +28,6 @@ def _get_config() -> 'AgentConfig':
     from app.core.config import AgentConfig
     return AgentConfig()
 
-
-from app.models.schemas import ListRecentScansSchema
-import json
 
 @tool(args_schema=ListRecentScansSchema)
 async def list_recent_scans(limit: int, config: RunnableConfig) -> str:
@@ -48,7 +47,7 @@ async def list_recent_scans(limit: int, config: RunnableConfig) -> str:
     db_pool = config.get("configurable", {}).get("db_pool")
     
     query = """
-        SELECT scan_id, scan_type, scan_status, scan_date, ai_diagnosis, confidence
+        SELECT scan_id, modality, scan_status, scan_date, ai_diagnosis, confidence
         FROM scan_results
         WHERE user_id = $1
         ORDER BY scan_date DESC
@@ -56,26 +55,21 @@ async def list_recent_scans(limit: int, config: RunnableConfig) -> str:
     """
 
     async def _fetch(conn: asyncpg.Connection) -> str:
-        try:
-            import uuid
-            rows = await conn.fetch(query, uuid.UUID(auth_user_id), limit)
-            if not rows:
-                return "No recent scans found."
-            
-            scans = []
-            for row in rows:
-                scans.append({
-                    "scan_id": str(row["scan_id"]),
-                    "scan_type": row["scan_type"],
-                    "scan_status": row["scan_status"],
-                    "scan_date": row["scan_date"].isoformat() if row["scan_date"] else None,
-                    "ai_diagnosis": row["ai_diagnosis"],
-                    "confidence": float(row["confidence"]) if row["confidence"] is not None else None,
-                })
-            return json.dumps(scans, indent=2)
-        except Exception as exc:
-            logger.exception("Failed to query recent scans: %s", exc)
-            return f"Database error: {exc}"
+        rows = await conn.fetch(query, uuid.UUID(auth_user_id), limit)
+        if not rows:
+            return "No recent scans found."
+        
+        scans = []
+        for row in rows:
+            scans.append({
+                "scan_id": str(row["scan_id"]),
+                "modality": row["modality"],
+                "scan_status": row["scan_status"],
+                "scan_date": row["scan_date"].isoformat() if row["scan_date"] else None,
+                "ai_diagnosis": row["ai_diagnosis"],
+                "confidence": float(row["confidence"]) if row["confidence"] is not None else None,
+            })
+        return json.dumps(scans, indent=2)
 
     if db_pool is not None:
         async with db_pool.acquire() as conn:
@@ -91,13 +85,9 @@ async def list_recent_scans(limit: int, config: RunnableConfig) -> str:
             await conn.close()
 
 
-
-_EMBED_DIM = 256
-_SIGNIFICANT_THRESHOLD = 0.5
-
-
 async def _temporal_progression_impl(
     conn: asyncpg.Connection,
+    auth_user_id: str,
     current_scan_id: str,
     previous_scan_id: Optional[str],
 ) -> Dict[str, Any]:
@@ -112,102 +102,140 @@ async def _temporal_progression_impl(
         previous_scan_id: Identifier of a specific previous scan (optional).
 
     Returns:
-        Dict[str, Any]: Dictionary containing ``l2_distance``, ``interpretation``,
-        and ``is_significant`` flag.
+        Dict[str, Any]: Dictionary containing progression results.
     """
+    user_uuid = uuid.UUID(auth_user_id)
+    
+    try:
+        curr_uuid = uuid.UUID(current_scan_id)
+    except ValueError:
+        return {"interpretation": f"Invalid current_scan_id format: '{current_scan_id}'"}
+
+    prev_uuid = None
+    if previous_scan_id is not None:
+        try:
+            prev_uuid = uuid.UUID(previous_scan_id)
+        except ValueError:
+            return {"interpretation": f"Invalid previous_scan_id format: '{previous_scan_id}'"}
+
     # Fetch current scan
     current = await conn.fetchrow(
         """
-        SELECT embedding, modality, primary_condition, patient_id
-        FROM patient_scans
-        WHERE id = $1 AND patient_id = $2
+        SELECT scan_id, modality, ai_diagnosis, confidence, scan_date
+        FROM scan_results
+        WHERE scan_id = $1 AND user_id = $2
         """,
-        current_scan_id, auth_user_id
+        curr_uuid, user_uuid
     )
     if current is None:
         return {
-            "l2_distance": None,
-            "interpretation": f"Current scan '{current_scan_id}' not found.",
-            "is_significant": None,
-        }
-
-    current_vector = _vec_to_list(current["embedding"])
-    if current_vector is None or len(current_vector) != _EMBED_DIM:
-        return {
-            "l2_distance": None,
-            "interpretation": (
-                f"Current scan embedding missing or not {_EMBED_DIM}-dimensional."
-            ),
-            "is_significant": None,
+            "interpretation": f"Current scan '{current_scan_id}' not found or does not belong to the user.",
         }
 
     modality = current["modality"]
-    condition = current["primary_condition"]
-    patient_id = current["patient_id"]
+    if not modality:
+        return {
+            "interpretation": f"Current scan '{current_scan_id}' has no modality specified.",
+        }
+        
+    current_diagnosis = current["ai_diagnosis"]
+    current_conf = float(current["confidence"]) if current["confidence"] is not None else None
+    current_date = current["scan_date"]
 
-    # Retrieve previous vector
+    # Retrieve previous scan
     if previous_scan_id is not None:
         prev_row = await conn.fetchrow(
-            "SELECT embedding, patient_id FROM patient_scans WHERE id = $1 AND patient_id = $2", previous_scan_id, auth_user_id
+            """
+            SELECT scan_id, modality, ai_diagnosis, confidence, scan_date
+            FROM scan_results 
+            WHERE scan_id = $1 AND user_id = $2
+            """, 
+            prev_uuid, user_uuid
         )
         if prev_row is None:
             return {
-                "l2_distance": None,
-                "interpretation": f"Previous scan '{previous_scan_id}' not found.",
-                "is_significant": None,
+                "interpretation": f"Previous scan '{previous_scan_id}' not found or does not belong to the user.",
             }
-        prev_vector = _vec_to_list(prev_row["embedding"])
+        if prev_row["modality"] != modality:
+            return {
+                "interpretation": f"Cannot compare scans of different modalities. Current is {modality}, previous is {prev_row['modality']}."
+            }
     else:
-        # Disease-specific matching
         prev_row = await conn.fetchrow(
             """
-            SELECT embedding
-            FROM patient_scans
-            WHERE patient_id = $1
+            SELECT scan_id, modality, ai_diagnosis, confidence, scan_date
+            FROM scan_results
+            WHERE user_id = $1
               AND modality = $2
-              AND primary_condition = $3
-              AND id != $4
-            ORDER BY created_at DESC
+              AND scan_date < $3
+              AND scan_id != $4
+            ORDER BY scan_date DESC
             LIMIT 1
             """,
-            patient_id,
+            user_uuid,
             modality,
-            condition,
-            current_scan_id,
+            current_date,
+            curr_uuid,
         )
         if prev_row is None:
             return {
-                "l2_distance": None,
-                "interpretation": (
-                    "No historical scans for this specific condition "
-                    "found for comparison."
-                ),
-                "is_significant": None,
+                "interpretation": f"No prior scan of modality '{modality}' found for comparison.",
             }
-        prev_vector = _vec_to_list(prev_row["embedding"])
 
-    if prev_vector is None or len(prev_vector) != _EMBED_DIM:
-        return {
-            "l2_distance": None,
-            "interpretation": (
-                f"Previous scan embedding missing or not {_EMBED_DIM}-dimensional."
-            ),
-            "is_significant": None,
-        }
+    previous_diagnosis = prev_row["ai_diagnosis"]
+    previous_conf = float(prev_row["confidence"]) if prev_row["confidence"] is not None else None
+    previous_date = prev_row["scan_date"]
+    
+    days_between = None
+    if current_date and previous_date:
+        days_between = (current_date.date() - previous_date.date()).days
 
-    # Compute L2 distance
-    distance = math.dist(current_vector, prev_vector)
-    significant = distance > _SIGNIFICANT_THRESHOLD
-    interpretation = (
-        f"L2 distance = {distance:.4f}; "
-        f"{'significant' if significant else 'no significant'} progression "
-        f"(threshold = {_SIGNIFICANT_THRESHOLD})."
-    )
+    confidence_delta = None
+    if current_conf is not None and previous_conf is not None:
+        confidence_delta = round(current_conf - previous_conf, 4)
+
+    def get_status(label: Optional[str], mod: str) -> str:
+        if not label:
+            return "unknown"
+        if label in _NORMAL_LABELS.get(mod, set()):
+            return "normal"
+        if label in _ABNORMAL_LABELS.get(mod, set()):
+            return "abnormal"
+        return "unknown"
+
+    prev_status = get_status(previous_diagnosis, modality)
+    curr_status = get_status(current_diagnosis, modality)
+
+    if prev_status == "unknown" or curr_status == "unknown":
+        direction = "indeterminate"
+        reason = "One or both diagnoses are empty or unrecognised."
+    elif prev_status == "normal" and curr_status == "abnormal":
+        direction = "worsening"
+        reason = "Normal to abnormal finding."
+    elif prev_status == "abnormal" and curr_status == "normal":
+        direction = "improving"
+        reason = "Abnormal to normal finding."
+    elif prev_status == "abnormal" and curr_status == "abnormal":
+        if previous_diagnosis == current_diagnosis:
+            direction = "unchanged"
+            reason = "Same abnormal finding."
+        else:
+            direction = "changed"
+            reason = "Different abnormal finding."
+    else:  # normal -> normal
+        direction = "unchanged"
+        if previous_diagnosis == current_diagnosis:
+            reason = "Same normal finding."
+        else:
+            reason = "Different normal finding."
 
     return {
-        "l2_distance": round(distance, 6),
-        "interpretation": interpretation,
-        "is_significant": significant,
+        "previous_diagnosis": previous_diagnosis,
+        "current_diagnosis": current_diagnosis,
+        "days_between": days_between,
+        "confidence_delta": confidence_delta,
+        "direction": direction,
+        "interpretation": reason,
     }
 
 
@@ -217,15 +245,7 @@ async def calculate_temporal_progression(
     config: RunnableConfig,
     previous_scan_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Compute L2 (Euclidean) distance between diagnostic embedding vectors of two scans.
-
-    If the distance exceeds 0.5, significant morphological progression (or
-    lesion growth) is indicated.
-
-    When a **previous scan identifier is not provided**, the tool performs
-    **disease-specific matching**: it looks up the most recent prior scan of
-    the same patient, same modality, and same ``primary_condition``
-    (e.g. Cardiomegaly).
+    """Compute progression between diagnostic results of two scans of the same modality.
 
     Args:
         current_scan_id (str): Identifier of the scan to be assessed.
@@ -233,70 +253,43 @@ async def calculate_temporal_progression(
         config (RunnableConfig): Injected LangGraph config containing the db_pool.
 
     Returns:
-        Dict[str, Any]: Dictionary containing ``l2_distance``, ``interpretation``,
-        and ``is_significant`` flag.  On error, ``l2_distance`` and
-        ``is_significant`` are ``None`` with a descriptive
-        ``interpretation``.
+        Dict[str, Any]: Dictionary containing progression results.
     """
     auth_user_id = config.get("configurable", {}).get("auth_user_id")
     if not auth_user_id:
         return {
-            "l2_distance": None,
             "interpretation": "Authentication error: auth_user_id not found in context.",
-            "is_significant": None,
         }
 
     db_pool = config.get("configurable", {}).get("db_pool") if config else None
     if db_pool is not None:
-        try:
-            async with db_pool.acquire() as conn:
-                return await _temporal_progression_impl(conn, auth_user_id, current_scan_id, previous_scan_id)
-        except Exception as exc:
-            logger.exception("Temporal progression computation failed: %s", exc)
-            return {
-                "l2_distance": None,
-                "interpretation": f"Error computing temporal progression: {exc}",
-                "is_significant": None,
-            }
+        async with db_pool.acquire() as conn:
+            return await _temporal_progression_impl(conn, auth_user_id, current_scan_id, previous_scan_id)
     else:
         dsn = _get_config().database_url
         if not dsn:
             return {
-                "l2_distance": None,
                 "interpretation": "DATABASE_URL environment variable not set — cannot query scans.",
-                "is_significant": None,
             }
 
-        conn: Optional[asyncpg.Connection] = None
+        conn = await asyncpg.connect(dsn)
         try:
-            conn = await asyncpg.connect(dsn)
             return await _temporal_progression_impl(conn, auth_user_id, current_scan_id, previous_scan_id)
-        except Exception as exc:
-            logger.exception("Temporal progression computation failed: %s", exc)
-            return {
-                "l2_distance": None,
-                "interpretation": f"Error computing temporal progression: {exc}",
-                "is_significant": None,
-            }
         finally:
-            if conn is not None:
-                await conn.close()
+            await conn.close()
 
 
 @tool(args_schema=QueryPatientMetricsSchema)
 async def query_patient_metrics(
     config: RunnableConfig,
 ) -> str:
-    """Retrieve tabular metrics (e.g. age, heart rate, blood pressure) for a patient.
-
-    Queries the ``patient_metrics`` table first.  If that table does not exist
-    or contains no rows, falls back to the ``patients`` table.
+    """Retrieve profile information for a patient.
 
     Args:
         config (RunnableConfig): Injected LangGraph config containing the db_pool.
 
     Returns:
-        str: A newline-separated string of key-value metric pairs, or a
+        str: A newline-separated string of profile information, or a
         descriptive error/not-found message.
     """
     auth_user_id = config.get("configurable", {}).get("auth_user_id")
@@ -305,62 +298,31 @@ async def query_patient_metrics(
     patient_id = auth_user_id
 
     async def _query_metrics(conn: asyncpg.Connection) -> str:
-        import uuid
-        # Try patient_metrics first
-        try:
-            row = await conn.fetchrow(
-                "SELECT * FROM patient_metrics WHERE patient_id = $1 ORDER BY created_at DESC LIMIT 1",
-                uuid.UUID(patient_id),
-            )
-            if row:
-                metrics: List[str] = []
-                for key, value in row.items():
-                    if key not in ("id", "patient_id", "created_at", "updated_at") and value is not None:
-                        metrics.append(f"{key}: {value}")
-                if metrics:
-                    return f"Metrics for patient '{patient_id}':\n" + "\n".join(metrics)
-        except asyncpg.PostgresError as exc:
-            logger.debug("patient_metrics table query failed (may not exist): %s", exc)
-
-        # Fallback to patients table
-        try:
-            row = await conn.fetchrow(
-                "SELECT * FROM patients WHERE id = $1", uuid.UUID(patient_id)
-            )
-            if row:
-                metrics = []
-                for key, value in row.items():
-                    if key not in ("id", "created_at", "updated_at") and value is not None:
-                        metrics.append(f"{key}: {value}")
-                if metrics:
-                    return f"Patient info for '{patient_id}':\n" + "\n".join(metrics)
-                else:
-                    return f"Patient '{patient_id}' found, but no metrics recorded."
-        except asyncpg.PostgresError as exc:
-            logger.debug("patients table query failed (may not exist): %s", exc)
-
-        return f"No metrics found for patient '{patient_id}'."
+        row = await conn.fetchrow(
+            "SELECT full_name, gender, date_of_birth, location, medical_history FROM patient_records WHERE user_id = $1", 
+            uuid.UUID(patient_id)
+        )
+        if row:
+            metrics = []
+            for key, value in row.items():
+                if value is not None:
+                    metrics.append(f"{key}: {value}")
+            if metrics:
+                return f"Profile for '{patient_id}':\n" + "\n".join(metrics)
+            else:
+                return f"Patient '{patient_id}' found, but no profile fields recorded."
+        return f"No patient records found for '{patient_id}'."
 
     db_pool = config.get("configurable", {}).get("db_pool") if config else None
     if db_pool is not None:
-        try:
-            async with db_pool.acquire() as conn:
-                return await _query_metrics(conn)
-        except Exception as exc:
-            logger.exception("Error querying patient metrics: %s", exc)
-            return f"An error occurred while querying patient metrics: {exc}"
+        async with db_pool.acquire() as conn:
+            return await _query_metrics(conn)
     else:
         dsn = _get_config().database_url
         if not dsn:
-            return "DATABASE_URL environment variable not set — cannot query patient metrics."
-
-        conn: Optional[asyncpg.Connection] = None
+            return "DATABASE_URL environment variable not set — cannot query patient profile."
+        conn = await asyncpg.connect(dsn)
         try:
-            conn = await asyncpg.connect(dsn)
             return await _query_metrics(conn)
-        except Exception as exc:
-            logger.exception("Error querying patient metrics: %s", exc)
-            return f"An error occurred while querying patient metrics: {exc}"
         finally:
-            if conn is not None:
-                await conn.close()
+            await conn.close()

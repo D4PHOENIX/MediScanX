@@ -39,31 +39,7 @@ _MODALITY_WEIGHTS: Dict[str, float] = {
 
 _CRITICAL_THRESHOLD = 0.85
 
-_NORMAL_LABELS: Dict[str, set[str]] = {
-    "cxr": {"No Finding"},
-    "ecg": {"NORM"},
-    "skin": {
-        "Melanocytic nevi",
-        "Benign keratosis-like lesions",
-        "Dermatofibroma",
-        "Vascular lesions",
-    },
-}
-
-_ABNORMAL_LABELS: Dict[str, set[str]] = {
-    "cxr": {
-        # CheXpert-14 pathologies
-        "Enlarged Cardiomediastinum", "Cardiomegaly", "Lung Opacity",
-        "Lung Lesion", "Edema", "Consolidation", "Pneumonia",
-        "Atelectasis", "Pneumothorax", "Pleural Effusion",
-        "Pleural Other", "Fracture",
-        # hierarchical heads
-        "Abnormal", "Fluid Accumulation", "Missing Lung Tissue",
-        "Cardiac", "Opacity",
-    },
-    "ecg": {"MI", "STTC", "CD", "HYP"},
-    "skin": {"Melanoma", "Basal cell carcinoma", "Actinic keratoses"},
-}
+from app.agent.tools.labels import _NORMAL_LABELS, _ABNORMAL_LABELS
 
 
 @tool
