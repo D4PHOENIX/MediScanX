@@ -51,7 +51,13 @@ async def get_history(
             detail="Database connection pool unavailable.",
         )
 
-    user_uuid = uuid.UUID(user_id)
+    try:
+        user_uuid = uuid.UUID(user_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token identity claim is not a valid UUID.",
+        ) from exc
 
     count_query = """
         SELECT COUNT(*)
@@ -132,7 +138,13 @@ async def get_trends(
             detail="Database connection pool unavailable.",
         )
 
-    user_uuid = uuid.UUID(user_id)
+    try:
+        user_uuid = uuid.UUID(user_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token identity claim is not a valid UUID.",
+        ) from exc
 
     query = """
         SELECT scan_id, modality, ai_diagnosis, confidence, scan_status, scan_date, xai_status, storage_path
