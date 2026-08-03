@@ -3,7 +3,7 @@
 POST /api/v1/fusion/fuse — returns a structured gauge payload suitable for
 driving a dedicated fusion screen with risk gauges and per-modality breakdown
 cards.  This endpoint reuses the B22 scoring logic (ported to
-``app.utils.fusion_engine``) and does **not** call the LangGraph agent.
+``app.services.fusion_engine``) and does **not** call the LangGraph agent.
 
 Auth pattern, error handling, and query construction mirror ``scans_router.py``
 exactly — JWT-derived identity via ``get_current_user``, every query scoped to
@@ -113,7 +113,7 @@ async def _run_selected_queries(
         Dict[str, Any]: Either ``{"message": str}`` on duplicate-modality
         rejection, or ``{"per_modality": dict, "unscored": list}`` on success.
     """
-    from app.utils.fusion_engine import _MODALITY_WEIGHTS  # noqa: PLC0415
+    from app.services.fusion_engine import _MODALITY_WEIGHTS  # noqa: PLC0415
 
     rows = await conn.fetch(
         """
