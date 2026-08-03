@@ -5,6 +5,7 @@ ensuring consistent contract enforcement for inference data, health monitoring,
 patient history, and orchestrated conversational exchanges.
 """
 
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -177,3 +178,36 @@ class GenerateReportRequest(BaseModel):
     patient_id: str = Field(..., description="Unique patient identifier")
     selected_scan_ids: List[str] = Field(..., description="List of scan IDs to include")
     llm_summary: str = Field(..., description="LLM-generated clinical summary")
+
+
+class HistoryScanItem(BaseModel):
+    """A single diagnostic scan record in the patient's history."""
+    scan_id: str
+    modality: str
+    ai_diagnosis: str
+    confidence: Optional[float] = None
+    scan_status: int
+    scan_date: Optional[datetime] = None
+    xai_status: str
+    has_image: bool = Field(..., description="True if storage_path IS NOT NULL")
+
+
+class HistoryResponse(BaseModel):
+    """Paginated scan history response."""
+    total_count: int
+    items: List[HistoryScanItem]
+
+
+class TrendTransition(BaseModel):
+    """Represents a diagnosis progression between two consecutive scans."""
+    from_diagnosis: str
+    to_diagnosis: str
+    days_between: Optional[int] = None
+    confidence_delta: Optional[float] = None
+    direction: str
+
+
+class TrendResponse(BaseModel):
+    """Progression of diagnostic results for a specific modality over time."""
+    scans: List[HistoryScanItem]
+    transitions: List[TrendTransition]
