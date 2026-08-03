@@ -211,3 +211,61 @@ class TrendResponse(BaseModel):
     """Progression of diagnostic results for a specific modality over time."""
     scans: List[HistoryScanItem]
     transitions: List[TrendTransition]
+
+
+class FusionRequest(BaseModel):
+    """Request payload for POST /api/v1/fusion/fuse.
+
+    Attributes:
+        selected_scan_ids: Optional list of scan UUIDs (as strings) to fuse.
+            When omitted the endpoint auto-selects the most recent scan per
+            modality for the authenticated caller.
+    """
+
+    selected_scan_ids: Optional[List[str]] = Field(
+        None,
+        description="UUIDs of the scans to fuse. Omit to auto-select the most recent scan per modality.",
+    )
+
+
+class ModalityRisk(BaseModel):
+    """Per-modality breakdown entry in the fusion response.
+
+    Attributes:
+        modality: The scan modality (``cxr``, ``ecg``, or ``skin``).
+        ai_diagnosis: The stored AI diagnosis label for this scan.
+        confidence: The model confidence in [0.0, 1.0].
+        status: ``"normal"`` or ``"abnormal"`` per the definitive label sets.
+    """
+
+    modality: str
+    ai_diagnosis: str
+    confidence: float
+    status: str
+
+
+class FusionResponse(BaseModel):
+    """Response payload for POST /api/v1/fusion/fuse.
+
+    Attributes:
+        overall_risk_score: Clinically weighted aggregate risk in [0.0, 1.0].
+        risk_level: ``"LOW"`` / ``"MODERATE"`` / ``"HIGH"`` / ``"CRITICAL"`` when
+            ``fusion_performed`` is true; ``null`` otherwise.
+        critical_alert: True only when ``fusion_performed`` is true and the
+            aggregated score meets the critical threshold (≥ 0.85).
+        fusion_performed: True when two or more modalities contributed to the score.
+        unscored: Modalities excluded from scoring with a reason string.
+        modality_risks: Per-modality breakdown for scored modalities only.
+        findings_summary: Human-readable clause-per-modality string, no LLM call.
+        message: Present only when no valid scans exist (mirrors the agent tool
+            message-style response).
+    """
+
+    overall_risk_score: float
+    risk_level: Optional[str] = None
+    critical_alert: bool
+    fusion_performed: bool
+    unscored: List[str] = Field(default_factory=list)
+    modality_risks: List[ModalityRisk] = Field(default_factory=list)
+    findings_summary: str = Field(default="")
+    message: Optional[str] = None

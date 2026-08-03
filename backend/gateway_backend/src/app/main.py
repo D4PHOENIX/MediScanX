@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.agent_router import router as agent_router
 from app.api.cxr_router import router as cxr_router
 from app.api.ecg_router import router as ecg_router
+from app.api.fusion_router import router as fusion_router
 from app.api.health import router as health_router
 from app.api.patient_router import router as patient_router
 from app.api.referral_router import router as referral_router
@@ -142,6 +143,7 @@ def create_app() -> FastAPI:
     application.include_router(ecg_router, prefix=api_prefix)
     application.include_router(skin_router, prefix=api_prefix)
     application.include_router(agent_router, prefix=api_prefix)
+    application.include_router(fusion_router, prefix=api_prefix)
     application.include_router(patient_router, prefix=api_prefix)
     application.include_router(referral_router, prefix=api_prefix)
     application.include_router(health_router, prefix=api_prefix)
