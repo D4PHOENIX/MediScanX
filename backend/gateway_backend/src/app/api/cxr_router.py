@@ -193,8 +193,14 @@ async def cxr_predict(
             logging.getLogger(__name__).error("Storage upload failed: %s", exc)
 
         # Step 3: Derive severity from confidence
-        top_findings = ml_result.get("top_findings", [])
-        confidence: float = float(top_findings[0].get("confidence", 0.0)) if top_findings else 0.0
+        top = ml_result.get("top_findings") or []
+        if top:
+            ai_diagnosis = str(top[0].get("label", ""))
+            confidence = float(top[0].get("confidence", 0.0))
+        else:
+            ai_diagnosis = None
+            confidence = 0.0
+
         scan_status: int = ScanPersistenceService.derive_scan_status(confidence)
 
         # Step 4: Persist to scan_results
@@ -207,7 +213,7 @@ async def cxr_predict(
                 scan_type=_SCAN_TYPE_CXR,
                 scan_status=scan_status,
                 image_url=image_url,
-                ai_diagnosis=str(ml_result.get("predicted_diagnoses", [""])[0] if ml_result.get("predicted_diagnoses") else ""),
+                ai_diagnosis=ai_diagnosis,
                 confidence=confidence,
                 findings=str(ml_result.get("findings", "")),
                 metadata=ml_result,

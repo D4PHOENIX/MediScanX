@@ -386,3 +386,88 @@ async def test_cxr_no_overlays(auth_headers) -> None:
         assert kwargs.get("xai_path") is None
         # metadata.xai key was removed in Task 1 — xai_status is the sole source of truth.
         assert "xai" not in kwargs["metadata"]
+
+@pytest.mark.asyncio
+async def test_cxr_ai_diagnosis_from_top_findings_invariant(auth_headers) -> None:
+    from unittest.mock import patch
+    
+    mock_client = AsyncMock()
+    mock_response = MagicMock(spec=Response)
+    mock_response.status_code = 200
+    mock_client.post.return_value = mock_response
+    app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
+    
+    with patch("app.api.cxr_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.cxr_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage:
+        
+        mock_storage.return_value = ("url_main", "user123/scan456.png")
+        
+        # Test 1: Two labels clear threshold. Lower-confidence at lower index.
+        mock_response.json.return_value = {
+            "predicted_diagnoses": ["Enlarged Cardiomediastinum", "Pleural Other"],
+            "top_findings": [
+                {"label": "Pleural Other", "confidence": 0.811, "class_idx": 11},
+                {"label": "Enlarged Cardiomediastinum", "confidence": 0.700, "class_idx": 1}
+            ]
+        }
+        
+        client.post("/api/v1/cxr/predict", headers=auth_headers,
+            files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 3})
+        
+        kwargs = mock_insert.call_args.kwargs
+        # Assert ai_diagnosis matches the higher-confidence label
+        assert kwargs["ai_diagnosis"] == "Pleural Other"
+        assert kwargs["confidence"] == 0.811
+        
+        mock_insert.reset_mock()
+        
+        # Test 2: predicted_diagnoses is empty, top_findings non-empty
+        mock_response.json.return_value = {
+            "predicted_diagnoses": [],
+            "top_findings": [
+                {"label": "Normal", "confidence": 0.5552, "class_idx": 0}
+            ]
+        }
+        
+        client.post("/api/v1/cxr/predict", headers=auth_headers,
+            files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 3})
+        
+        kwargs = mock_insert.call_args.kwargs
+        assert kwargs["ai_diagnosis"] == "Normal"
+        assert kwargs["confidence"] == 0.5552
+        
+        mock_insert.reset_mock()
+        
+        # Test 3: top_findings is empty
+        mock_response.json.return_value = {
+            "predicted_diagnoses": [],
+            "top_findings": []
+        }
+        
+        client.post("/api/v1/cxr/predict", headers=auth_headers,
+            files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 3})
+        
+        kwargs = mock_insert.call_args.kwargs
+        # Assert fallback is None and 0.0
+        assert kwargs["ai_diagnosis"] is None
+        assert kwargs["confidence"] == 0.0
+        
+        # Test 4: Invariant check
+        mock_insert.reset_mock()
+        mock_response.json.return_value = {
+            "predicted_diagnoses": ["Cardiomegaly", "Edema", "Fracture"],
+            "top_findings": [
+                {"label": "Edema", "confidence": 0.999, "class_idx": 5},
+                {"label": "Cardiomegaly", "confidence": 0.600, "class_idx": 2},
+                {"label": "Fracture", "confidence": 0.510, "class_idx": 12}
+            ]
+        }
+        
+        client.post("/api/v1/cxr/predict", headers=auth_headers,
+            files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 3})
+        
+        kwargs = mock_insert.call_args.kwargs
+        assert kwargs["ai_diagnosis"] == "Edema"
+        assert kwargs["confidence"] == 0.999
