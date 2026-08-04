@@ -349,7 +349,8 @@ async def test_cxr_overlay_upload_failure(auth_headers, fake_ml_data) -> None:
         kwargs = mock_insert.call_args.kwargs
         metadata = kwargs["metadata"]
         assert metadata["top_findings"][0]["label"] == "Infiltrate"
-        assert metadata["xai"]["status"] == "overlay_upload_failed"
+        # metadata.xai key was removed in Task 1 — xai_status is the sole source of truth.
+        assert "xai" not in metadata
         assert kwargs["xai_status"] == "failed"
         assert kwargs.get("xai_path") is None
 
@@ -383,4 +384,5 @@ async def test_cxr_no_overlays(auth_headers) -> None:
         kwargs = mock_insert.call_args.kwargs
         assert kwargs["xai_status"] == "none"
         assert kwargs.get("xai_path") is None
-        assert kwargs["metadata"]["xai"]["status"] == "none"
+        # metadata.xai key was removed in Task 1 — xai_status is the sole source of truth.
+        assert "xai" not in kwargs["metadata"]

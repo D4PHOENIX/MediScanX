@@ -686,3 +686,35 @@ async def test_sync_insert_zero_rows_own_conflict_no_delete(auth_headers) -> Non
         assert data["status"] == "already_synced"
         assert data["storage_path"] == uploaded_path
         mock_delete.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Task 1 — xai_status='skipped_edge' test
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_edge_sync_insert_passes_skipped_edge_xai_status(auth_headers) -> None:
+    """Edge sync insert must pass xai_status='skipped_edge' and xai_path=None explicitly."""
+    uploaded_path = f"{VALID_USER_ID}/scan_id.jpg"
+    pool_mock, conn_mock = _make_pool_mock(fetchrow_return=None)
+    app.state.db_pool = pool_mock
+    app.state.supabase_client = MagicMock()
+    app.state.http_client = MagicMock()
+
+    with patch("app.api.sync_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_upload, \
+         patch("app.api.sync_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.sync_router.StorageService.delete_scan_objects", new_callable=AsyncMock):
+        mock_upload.return_value = ("https://example.com/object/public/img", uploaded_path)
+        mock_insert.return_value = True
+
+        response = client.post(
+            "/api/v1/sync/edge-inference",
+            headers=auth_headers,
+            data=_valid_form(),
+            files={"file": ("scan.jpg", b"fake", "image/jpeg")},
+        )
+        assert response.status_code == 200
+
+        insert_kwargs = mock_insert.call_args.kwargs
+        assert insert_kwargs["xai_status"] == "skipped_edge"
+        assert insert_kwargs.get("xai_path") is None

@@ -8,8 +8,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from app.core.security import get_current_user
 from app.models.domain import ScanModality
-from app.models.schemas import HistoryResponse, HistoryScanItem, TrendResponse, TrendTransition
+from app.models.schemas import ExplainabilityInfo, HistoryResponse, HistoryScanItem, TrendResponse, TrendTransition
 from app.utils.labels import _ABNORMAL_LABELS, _NORMAL_LABELS
+from app.utils.xai_utils import build_xai_authenticated_url
 
 router: APIRouter = APIRouter(prefix="", tags=["scans"])
 
@@ -51,13 +52,7 @@ async def get_history(
             detail="Database connection pool unavailable.",
         )
 
-    try:
-        user_uuid = uuid.UUID(user_id)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token identity claim is not a valid UUID.",
-        ) from exc
+    user_uuid = uuid.UUID(user_id)
 
     count_query = """
         SELECT COUNT(*)
@@ -70,7 +65,7 @@ async def get_history(
         count_args.append(modality)
 
     data_query = """
-        SELECT scan_id, modality, ai_diagnosis, confidence, scan_status, scan_date, xai_status, storage_path
+        SELECT scan_id, modality, ai_diagnosis, confidence, scan_status, scan_date, xai_status, xai_path, storage_path
         FROM scan_results
         WHERE user_id = $1 AND modality IS NOT NULL
     """
@@ -97,6 +92,7 @@ async def get_history(
 
     items = []
     for row in rows:
+        row_xai_status = row["xai_status"] or "none"
         items.append(
             HistoryScanItem(
                 scan_id=str(row["scan_id"]),
@@ -105,8 +101,13 @@ async def get_history(
                 confidence=float(row["confidence"]) if row["confidence"] is not None else None,
                 scan_status=row["scan_status"],
                 scan_date=row["scan_date"],
-                xai_status=row["xai_status"] or "none",
+                xai_status=row_xai_status,
                 has_image=row["storage_path"] is not None,
+                explainability=ExplainabilityInfo(
+                    status=row_xai_status,
+                    url=build_xai_authenticated_url(row["xai_path"]),
+                    modality=row["modality"],
+                ),
             )
         )
 
@@ -138,18 +139,12 @@ async def get_trends(
             detail="Database connection pool unavailable.",
         )
 
-    try:
-        user_uuid = uuid.UUID(user_id)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token identity claim is not a valid UUID.",
-        ) from exc
+    user_uuid = uuid.UUID(user_id)
 
     query = """
-        SELECT scan_id, modality, ai_diagnosis, confidence, scan_status, scan_date, xai_status, storage_path
+        SELECT scan_id, modality, ai_diagnosis, confidence, scan_status, scan_date, xai_status, xai_path, storage_path
         FROM (
-            SELECT scan_id, modality, ai_diagnosis, confidence, scan_status, scan_date, xai_status, storage_path
+            SELECT scan_id, modality, ai_diagnosis, confidence, scan_status, scan_date, xai_status, xai_path, storage_path
             FROM scan_results
             WHERE user_id = $1 AND modality = $2 AND modality IS NOT NULL
             ORDER BY scan_date DESC NULLS LAST
@@ -172,6 +167,7 @@ async def get_trends(
 
     scans = []
     for row in rows:
+        row_xai_status = row["xai_status"] or "none"
         scans.append(
             HistoryScanItem(
                 scan_id=str(row["scan_id"]),
@@ -180,8 +176,13 @@ async def get_trends(
                 confidence=float(row["confidence"]) if row["confidence"] is not None else None,
                 scan_status=row["scan_status"],
                 scan_date=row["scan_date"],
-                xai_status=row["xai_status"] or "none",
+                xai_status=row_xai_status,
                 has_image=row["storage_path"] is not None,
+                explainability=ExplainabilityInfo(
+                    status=row_xai_status,
+                    url=build_xai_authenticated_url(row["xai_path"]),
+                    modality=row["modality"],
+                ),
             )
         )
 

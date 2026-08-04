@@ -180,6 +180,8 @@ class EdgeSyncService:
                 inference_source="edge",
                 storage_path=storage_path,
                 modality=derived_modality,
+                xai_path=None,
+                xai_status="skipped_edge",
             )
         except Exception as exc:
             logger.error(

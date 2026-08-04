@@ -22,6 +22,7 @@ from app.core.config import gateway_config
 from app.core.exceptions import ServiceUnavailableError
 from app.core.security import get_current_user
 from app.utils.attribution_utils import resolve_attribution
+from app.utils.xai_utils import build_xai_authenticated_url
 from app.services.scan_persistence_service import ScanPersistenceService
 from app.services.storage_service import StorageService
 from app.models.domain import ScanModality
@@ -124,9 +125,6 @@ async def cxr_predict(
         scan_id: str = str(uuid.uuid4())
 
         ml_result.pop("original_img", None)
-        
-        if "xai" not in ml_result:
-            ml_result["xai"] = {"kind": "gradcam", "note": "Class activation mapping", "status": "none", "url": None}
 
         xai_path: Optional[str] = None
         xai_status: str = "none"
@@ -139,16 +137,16 @@ async def cxr_predict(
             if "overlay_img" in finding:
                 has_overlays = True
                 b64_img = finding.pop("overlay_img")
-                
+
                 try:
                     if b64_img.startswith("data:image"):
                         b64_data = b64_img.split(",", 1)[-1]
                     else:
                         b64_data = b64_img
-                        
+
                     img_bytes = base64.b64decode(b64_data)
                     overlay_path = f"{final_user_id}/{scan_id}/overlay_{idx}.png"
-                    
+
                     _, stored_path = await StorageService.upload_scan_image(
                         supabase_client=request.app.state.supabase_client,
                         bucket=gateway_config.supabase_storage_bucket,
@@ -161,7 +159,7 @@ async def cxr_predict(
                     finding["overlay_path"] = stored_path
                     upload_success_count += 1
                     uploaded_overlay_paths.append(stored_path)
-                    
+
                     # Capture the top finding's overlay path for the canonical column
                     if xai_path is None:
                         xai_path = stored_path
@@ -170,13 +168,10 @@ async def cxr_predict(
 
         if has_overlays:
             if upload_success_count > 0:
-                ml_result["xai"]["status"] = "success"
                 xai_status = "generated"
             else:
-                ml_result["xai"]["status"] = "overlay_upload_failed"
                 xai_status = "failed"
         else:
-            ml_result["xai"]["status"] = "none"
             xai_status = "none"
 
         # Step 2: Upload image to Supabase Storage
@@ -225,7 +220,7 @@ async def cxr_predict(
         except Exception as exc:
             import logging
             logging.getLogger(__name__).error("Failed to persist scan result: %s", exc)
-            
+
             if uploaded_overlay_paths:
                 try:
                     await StorageService.delete_scan_objects(
@@ -236,12 +231,17 @@ async def cxr_predict(
                     )
                 except Exception as cleanup_exc:
                     logging.getLogger(__name__).warning("Orphaned overlay objects remaining after persistence failure: %s (cleanup error: %s)", uploaded_overlay_paths, cleanup_exc)
-            
+
             # The endpoint does not return 200, it raises the original exception
             raise
 
         # Step 5: Augment response with persistence identifiers
         ml_result["scan_id"] = scan_id
         ml_result["image_url"] = image_url
+        ml_result["explainability"] = {
+            "status": xai_status,
+            "url": build_xai_authenticated_url(xai_path),
+            "modality": ScanModality.CXR.value,
+        }
 
     return ml_result

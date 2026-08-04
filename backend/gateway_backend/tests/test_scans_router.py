@@ -75,6 +75,7 @@ def test_history_caller_rows_only(auth_headers, app_state_override):
         "scan_status": 0,
         "scan_date": datetime.now(timezone.utc),
         "xai_status": "none",
+        "xai_path": None,
         "storage_path": "path/to/img"
     }
     pool, _ = create_mock_pool(fetch_return=[row], fetchval_return=1)
@@ -135,6 +136,7 @@ def test_history_scan_type_absent(auth_headers, app_state_override):
         "scan_status": 0,
         "scan_date": datetime.now(timezone.utc),
         "xai_status": "none",
+        "xai_path": None,
         "storage_path": "path/to/img"
     }
     pool, _ = create_mock_pool(fetch_return=[row], fetchval_return=1)
@@ -165,6 +167,7 @@ def run_trends_transition_test(auth_headers, diag1, diag2, expected_direction, m
         "scan_status": 0,
         "scan_date": datetime.now(timezone.utc),
         "xai_status": "none",
+        "xai_path": None,
         "storage_path": None
     }
     row2 = {
@@ -175,6 +178,7 @@ def run_trends_transition_test(auth_headers, diag1, diag2, expected_direction, m
         "scan_status": 0,
         "scan_date": datetime.now(timezone.utc),
         "xai_status": "none",
+        "xai_path": None,
         "storage_path": None
     }
     pool, _ = create_mock_pool(fetch_return=[row1, row2])
@@ -227,6 +231,7 @@ def test_trends_one_scan(auth_headers, app_state_override):
         "scan_status": 0,
         "scan_date": datetime.now(timezone.utc),
         "xai_status": "none",
+        "xai_path": None,
         "storage_path": None
     }
     pool, _ = create_mock_pool(fetch_return=[row])
@@ -258,3 +263,97 @@ def test_history_db_failure(auth_headers, app_state_override):
     resp = client.get("/api/v1/scans/history", headers=auth_headers)
     assert resp.status_code == 503
     assert resp.json()["detail"] == "Database query failed"
+
+
+# ---------------------------------------------------------------------------
+# Task 4 — explainability in history responses
+# ---------------------------------------------------------------------------
+
+def _make_history_row(xai_status: str, xai_path=None, modality: str = "cxr") -> dict:
+    """Helper: build a minimal mock db row for history/trends tests."""
+    return {
+        "scan_id": str(uuid.uuid4()),
+        "modality": modality,
+        "ai_diagnosis": "No Finding",
+        "confidence": 0.80,
+        "scan_status": 0,
+        "scan_date": datetime.now(timezone.utc),
+        "xai_status": xai_status,
+        "xai_path": xai_path,
+        "storage_path": "p" if xai_path else None,
+    }
+
+
+def test_history_explainability_status_none(auth_headers, app_state_override):
+    """A row with xai_status='none' produces explainability.status='none' and url=null."""
+    row = _make_history_row("none", xai_path=None)
+    pool, _ = create_mock_pool(fetch_return=[row], fetchval_return=1)
+    app.state.db_pool = pool
+
+    resp = client.get("/api/v1/scans/history", headers=auth_headers)
+    assert resp.status_code == 200
+    item = resp.json()["items"][0]
+    assert "explainability" in item
+    xai = item["explainability"]
+    assert xai["status"] == "none"
+    assert xai["url"] is None
+    assert xai["modality"] == "cxr"
+
+
+def test_history_explainability_status_generated_url_non_null(auth_headers, app_state_override):
+    """A row with xai_status='generated' produces non-null url built from xai_path."""
+    fake_path = f"{FAKE_USER_ID}/{uuid.uuid4()}/overlay_0.png"
+    row = _make_history_row("generated", xai_path=fake_path, modality="cxr")
+    pool, _ = create_mock_pool(fetch_return=[row], fetchval_return=1)
+    app.state.db_pool = pool
+
+    resp = client.get("/api/v1/scans/history", headers=auth_headers)
+    assert resp.status_code == 200
+    xai = resp.json()["items"][0]["explainability"]
+    assert xai["status"] == "generated"
+    assert xai["url"] is not None
+    assert "/authenticated/" in xai["url"]
+    assert fake_path in xai["url"]
+    assert "/public/" not in xai["url"]
+    # No signed URL query parameter
+    assert "token=" not in xai["url"]
+    assert "?" not in xai["url"]
+
+
+def test_history_explainability_status_failed(auth_headers, app_state_override):
+    """A row with xai_status='failed' produces url=null."""
+    row = _make_history_row("failed", xai_path=None)
+    pool, _ = create_mock_pool(fetch_return=[row], fetchval_return=1)
+    app.state.db_pool = pool
+
+    resp = client.get("/api/v1/scans/history", headers=auth_headers)
+    assert resp.status_code == 200
+    xai = resp.json()["items"][0]["explainability"]
+    assert xai["status"] == "failed"
+    assert xai["url"] is None
+
+
+def test_history_explainability_status_skipped_edge(auth_headers, app_state_override):
+    """A row with xai_status='skipped_edge' produces url=null."""
+    row = _make_history_row("skipped_edge", xai_path=None, modality="ecg")
+    pool, _ = create_mock_pool(fetch_return=[row], fetchval_return=1)
+    app.state.db_pool = pool
+
+    resp = client.get("/api/v1/scans/history", headers=auth_headers)
+    assert resp.status_code == 200
+    xai = resp.json()["items"][0]["explainability"]
+    assert xai["status"] == "skipped_edge"
+    assert xai["url"] is None
+    assert xai["modality"] == "ecg"
+
+
+def test_history_bare_xai_status_still_present(auth_headers, app_state_override):
+    """The bare top-level xai_status field is still present (backwards compatibility)."""
+    row = _make_history_row("generated", xai_path=f"{FAKE_USER_ID}/scan/overlay_0.png")
+    pool, _ = create_mock_pool(fetch_return=[row], fetchval_return=1)
+    app.state.db_pool = pool
+
+    resp = client.get("/api/v1/scans/history", headers=auth_headers)
+    item = resp.json()["items"][0]
+    assert "xai_status" in item
+    assert item["xai_status"] == "generated"

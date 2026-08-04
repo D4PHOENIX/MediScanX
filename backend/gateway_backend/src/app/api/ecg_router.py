@@ -20,6 +20,7 @@ from app.core.config import gateway_config
 from app.core.exceptions import ServiceUnavailableError
 from app.core.security import get_current_user
 from app.utils.attribution_utils import resolve_attribution
+from app.utils.xai_utils import build_xai_authenticated_url
 from app.services.scan_persistence_service import ScanPersistenceService
 from app.services.storage_service import StorageService
 from app.models.domain import ScanModality
@@ -169,6 +170,8 @@ async def ecg_predict(
                 inference_source="cloud",
                 storage_path=storage_path,
                 modality=ScanModality.ECG.value,
+                xai_path=None,
+                xai_status="none",
             )
         except Exception as exc:
             import logging
@@ -177,5 +180,10 @@ async def ecg_predict(
         # Step 5: Augment response with persistence identifiers
         ml_result["scan_id"] = scan_id
         ml_result["image_url"] = image_url
+        ml_result["explainability"] = {
+            "status": "none",
+            "url": None,
+            "modality": ScanModality.ECG.value,
+        }
 
     return ml_result
