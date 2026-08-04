@@ -3,7 +3,7 @@
 POST /api/v1/fusion/fuse — returns a structured gauge payload suitable for
 driving a dedicated fusion screen with risk gauges and per-modality breakdown
 cards.  This endpoint reuses the B22 scoring logic (ported to
-``app.services.fusion_engine``) and does **not** call the LangGraph agent.
+``app.utils.fusion_engine``) and does **not** call the LangGraph agent.
 
 Auth pattern, error handling, and query construction mirror ``scans_router.py``
 exactly — JWT-derived identity via ``get_current_user``, every query scoped to
@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from app.core.security import get_current_user
 from app.models.schemas import FusionRequest, FusionResponse, ModalityRisk
 from app.services.fusion_engine import run_fusion_scoring
+from app.services.llm_service import generate_hedged_text
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -205,7 +206,7 @@ async def fuse(
 
     user_uuid = uuid.UUID(user_id)
 
-    # Validate selected_scan_ids when provided
+    # --- Validate selected_scan_ids when provided ---
     scan_uuids: Optional[List[uuid.UUID]] = None
     if body.selected_scan_ids is not None:
         validated: List[uuid.UUID] = []
@@ -222,7 +223,7 @@ async def fuse(
     try:
         async with db_pool.acquire() as conn:
             if scan_uuids is not None:
-                # Caller-supplied IDs path
+                # --- Caller-supplied IDs path ---
                 result = await _run_selected_queries(conn, user_uuid, scan_uuids)
 
                 # Duplicate-modality rejection: return message-style response
@@ -254,7 +255,7 @@ async def fuse(
                     )
 
             else:
-                # Auto-select path
+                # --- Auto-select path ---
                 per_modality = await _run_autoselect_queries(conn, user_uuid)
                 query_unscored = []
 
@@ -277,7 +278,7 @@ async def fuse(
             detail="Database query failed",
         ) from exc
 
-    # Scoring 
+    # --- Scoring ---
     scoring_result = run_fusion_scoring(
         cxr_results=per_modality.get("cxr"),
         ecg_results=per_modality.get("ecg"),
@@ -300,6 +301,25 @@ async def fuse(
 
     findings_summary = _build_findings_summary(modality_risks)
 
+    clinical_correlation = None
+    abnormal_risks = [mr for mr in modality_risks if mr.status == "abnormal"]
+    if len(abnormal_risks) >= 2:
+        findings_list = "\n".join(
+            f"{mr.modality.upper()}: {mr.ai_diagnosis} ({mr.status}, {mr.confidence * 100:.1f}%)"
+            for mr in abnormal_risks
+        )
+        prompt = (
+            "Given these findings from independent diagnostic scans of the same\n"
+            f"patient: {findings_list}. Write exactly 2 sentences. Never assert that one\n"
+            "finding caused another. If these findings have a recognized clinical\n"
+            "association, describe that they can occur together and that a clinician\n"
+            "reviewing both may find it relevant. If there's no recognized\n"
+            "relationship, say so rather than inventing one. Avoid \"is caused by,\" \"is\n"
+            "a direct result of,\" \"because of.\" Use \"can be associated with,\" \"may\n"
+            "sometimes occur alongside,\" \"worth reviewing together with a doctor.\""
+        )
+        clinical_correlation = await generate_hedged_text(prompt)
+
     return FusionResponse(
         overall_risk_score=scoring_result["overall_risk_score"],
         risk_level=scoring_result["risk_level"],
@@ -308,4 +328,5 @@ async def fuse(
         unscored=all_unscored,
         modality_risks=modality_risks,
         findings_summary=findings_summary,
+        clinical_correlation=clinical_correlation,
     )

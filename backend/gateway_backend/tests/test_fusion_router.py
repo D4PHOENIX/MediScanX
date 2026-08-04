@@ -181,7 +181,7 @@ def test_risk_level_below_0_60(app_state_override):
 
 
 def test_risk_level_at_0_85(app_state_override):
-    """A score app.utils.fusion_engineof exactly 0.85 must be CRITICAL."""
+    """A score of exactly 0.85 must be CRITICAL."""
     from app.services.fusion_engine import compute_risk_level
     assert compute_risk_level(0.85) == "CRITICAL"
 
@@ -516,3 +516,105 @@ def test_unscored_not_in_modality_risks(app_state_override):
     assert "cxr" not in modality_names
     assert "ecg" in modality_names
     assert any("cxr" in u for u in data["unscored"])
+
+# ---------------------------------------------------------------------------
+# Test 14: Clinical correlation with LLM
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def mock_generate_hedged_text():
+    with patch("app.api.fusion_router.generate_hedged_text", new_callable=AsyncMock) as m:
+        m.return_value = "Correlation text."
+        yield m
+
+def test_clinical_correlation_2_abnormal(app_state_override, mock_generate_hedged_text):
+    cxr_id = str(uuid.uuid4())
+    ecg_id = str(uuid.uuid4())
+
+    pool, _ = _make_pool_with_fetch(
+        fetch_return=[
+            _make_row("cxr", "Enlarged Cardiomediastinum", 0.90),
+            _make_row("ecg", "MI", 0.90),
+        ]
+    )
+    app.state.db_pool = pool
+
+    resp = client.post(URL, json={"selected_scan_ids": [cxr_id, ecg_id]})
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert data["fusion_performed"] is True
+    assert data["clinical_correlation"] == "Correlation text."
+    mock_generate_hedged_text.assert_called_once()
+
+
+def test_clinical_correlation_1_abnormal_1_normal(app_state_override, mock_generate_hedged_text):
+    cxr_id = str(uuid.uuid4())
+    ecg_id = str(uuid.uuid4())
+
+    pool, _ = _make_pool_with_fetch(
+        fetch_return=[
+            _make_row("cxr", "Enlarged Cardiomediastinum", 0.90),
+            _make_row("ecg", "Normal", 0.90),
+        ]
+    )
+    app.state.db_pool = pool
+
+    resp = client.post(URL, json={"selected_scan_ids": [cxr_id, ecg_id]})
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert data["clinical_correlation"] is None
+    mock_generate_hedged_text.assert_not_called()
+
+
+def test_clinical_correlation_3_abnormal(app_state_override, mock_generate_hedged_text):
+    cxr_id = str(uuid.uuid4())
+    ecg_id = str(uuid.uuid4())
+    skin_id = str(uuid.uuid4())
+
+    pool, _ = _make_pool_with_fetch(
+        fetch_return=[
+            _make_row("cxr", "Enlarged Cardiomediastinum", 0.90),
+            _make_row("ecg", "MI", 0.90),
+            _make_row("skin", "Melanoma", 0.90),
+        ]
+    )
+    app.state.db_pool = pool
+
+    resp = client.post(URL, json={"selected_scan_ids": [cxr_id, ecg_id, skin_id]})
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert data["clinical_correlation"] == "Correlation text."
+    mock_generate_hedged_text.assert_called_once()
+    prompt = mock_generate_hedged_text.call_args.args[0]
+    assert "CXR: Enlarged Cardiomediastinum" in prompt
+    assert "ECG: MI" in prompt
+    assert "SKIN: Melanoma" in prompt
+
+
+def test_clinical_correlation_llm_failure_does_not_affect_gauge(app_state_override, mock_generate_hedged_text):
+    cxr_id = str(uuid.uuid4())
+    ecg_id = str(uuid.uuid4())
+
+    pool, _ = _make_pool_with_fetch(
+        fetch_return=[
+            _make_row("cxr", "Enlarged Cardiomediastinum", 1.0),
+            _make_row("ecg", "MI", 1.0),
+        ]
+    )
+    app.state.db_pool = pool
+
+    # Simulate LLM returning None (or raising, but our LLM helper catches and returns None)
+    mock_generate_hedged_text.return_value = None
+
+    resp = client.post(URL, json={"selected_scan_ids": [cxr_id, ecg_id]})
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert data["clinical_correlation"] is None
+    assert data["fusion_performed"] is True
+    assert data["critical_alert"] is True
+    assert data["risk_level"] == "CRITICAL"
+    assert data["overall_risk_score"] == 1.0

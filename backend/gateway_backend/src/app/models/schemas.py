@@ -184,17 +184,17 @@ class ReferralRequest(BaseModel):
 
 
 class GenerateReportRequest(BaseModel):
-    """Data contract for initiating the generation of a clinical PDF report.
+    """Payload for generating a clinical diagnostic report.
 
-    Attributes:
-        patient_id: The universal identifier of the patient.
-        selected_scan_ids: A list of scan identifiers to include in the report.
-        llm_summary: The synthesized clinical interpretation provided by the orchestration agent.
+    Expects a list of scan identifiers to include in the synthesized document.
     """
 
-    patient_id: str = Field(..., description="Unique patient identifier")
-    selected_scan_ids: List[str] = Field(..., description="List of scan IDs to include")
-    llm_summary: str = Field(..., description="LLM-generated clinical summary")
+    selected_scan_ids: List[str] = Field(
+        ...,
+        description="A list of unique scan identifiers (UUIDs) to aggregate into the report.",
+        min_length=1,
+    )
+    patient_id: str = Field(..., description="The universal identifier of the target patient.")
 
 
 class HistoryScanItem(BaseModel):
@@ -289,4 +289,5 @@ class FusionResponse(BaseModel):
     unscored: List[str] = Field(default_factory=list)
     modality_risks: List[ModalityRisk] = Field(default_factory=list)
     findings_summary: str = Field(default="")
+    clinical_correlation: Optional[str] = None
     message: Optional[str] = None
