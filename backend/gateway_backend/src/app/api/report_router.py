@@ -27,7 +27,7 @@ router: APIRouter = APIRouter(prefix="/reports", tags=["reports"], dependencies=
 
 
 @router.post("/generate")
-async def generate_report(payload: GenerateReportRequest, request: Request) -> Dict[str, str]:
+async def generate_report(payload: GenerateReportRequest, request: Request, current_user: str = Depends(get_current_user)) -> Dict[str, str]:
     """Creates a comprehensive clinical PDF report and stages it in cloud storage.
 
     Aggregates diagnostic metadata directly from the primary database, generates
@@ -53,11 +53,20 @@ async def generate_report(payload: GenerateReportRequest, request: Request) -> D
     try:
         rows: List[asyncpg.Record] = await conn.fetch(
             """
-            SELECT id, modality, predicted_class, created_at
-            FROM patient_scans
-            WHERE id = ANY($1::text[])
+            SELECT scan_id, modality, ai_diagnosis, confidence, scan_date,
+                   xai_status, xai_path
+            FROM scan_results
+            WHERE scan_id = ANY($1::uuid[])
+              AND (user_id = $2::uuid OR EXISTS (
+                  SELECT 1 FROM care_relationships 
+                  WHERE doctor_id = $2::uuid 
+                    AND patient_id = scan_results.user_id 
+                    AND status = 'active'
+                    AND (expires_at IS NULL OR expires_at > now())
+              ))
             """,
             payload.selected_scan_ids,
+            current_user
         )
     finally:
         await conn.close()
@@ -66,12 +75,21 @@ async def generate_report(payload: GenerateReportRequest, request: Request) -> D
     for row in rows:
         scan_metadata.append(
             {
-                "id": row["id"],
+                "id": str(row["scan_id"]),
                 "modality": row["modality"],
-                "class": row["predicted_class"],
-                "timestamp": row["created_at"].isoformat() if row["created_at"] else "N/A",
+                "ai_diagnosis": row["ai_diagnosis"],
+                "confidence": float(row["confidence"]) if row["confidence"] is not None else None,
+                "timestamp": row["scan_date"].isoformat() if row["scan_date"] else "N/A",
+                "xai_status": row["xai_status"],
+                "xai_path": row["xai_path"],
             }
         )
+
+    if not scan_metadata:
+        raise HTTPException(status_code=403, detail="No matching scans found or access denied")
+        
+    if len(scan_metadata) != len(payload.selected_scan_ids):
+        raise HTTPException(status_code=403, detail="Access denied to one or more requested scans")
 
     # Generate PDF and upload to Supabase
     gen: ReportGenerator = ReportGenerator()
@@ -81,7 +99,6 @@ async def generate_report(payload: GenerateReportRequest, request: Request) -> D
     pdf_bytes, signed_url, file_name = await gen.generate_qr_report(
         patient_id=payload.patient_id,
         scan_metadata=scan_metadata,
-        llm_summary=payload.llm_summary,
         supabase_client=request.app.state.supabase_client,
     )
 
@@ -95,7 +112,7 @@ async def generate_report(payload: GenerateReportRequest, request: Request) -> D
 
 
 @router.get("/download/{patient_id}")
-async def download_report(patient_id: str, request: Request) -> RedirectResponse:
+async def download_report(patient_id: str, request: Request, current_user: str = Depends(get_current_user)) -> RedirectResponse:
     """Redirects the client to the securely signed cloud storage URL for the report.
 
     Args:
@@ -109,6 +126,34 @@ async def download_report(patient_id: str, request: Request) -> RedirectResponse
         HTTPException: Raises 404 if the report has not been generated, or 500
             if cloud storage integration fails.
     """
+    
+    # 1. Enforce tenant ownership (or care access) before signing a URL
+    dsn: str | None = gateway_config.database_url
+    if not dsn:
+        raise HTTPException(status_code=500, detail="DATABASE_URL not set")
+
+    conn: asyncpg.Connection = await asyncpg.connect(dsn)
+    try:
+        if current_user != patient_id:
+            # Check care relationship if caller is not the patient
+            has_access = await conn.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM care_relationships 
+                    WHERE doctor_id = $1::uuid 
+                      AND patient_id = $2::uuid 
+                      AND status = 'active'
+                      AND (expires_at IS NULL OR expires_at > now())
+                )
+                """,
+                current_user,
+                patient_id
+            )
+            if not has_access:
+                raise HTTPException(status_code=403, detail="Access denied")
+    finally:
+        await conn.close()
+        
     # Using a deterministic path allows any worker to resolve the file location.
     file_path = f"{patient_id}_report.pdf"
 
