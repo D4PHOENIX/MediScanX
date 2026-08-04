@@ -5,9 +5,10 @@ and `.env` files, providing a strongly-typed and immutable configuration singlet
 used throughout the gateway deployment.
 """
 
-from typing import List
+from typing import List, Optional
+import os
 
-from pydantic import field_validator
+from pydantic import field_validator, Field
 from pydantic_settings import BaseSettings
 
 
@@ -36,6 +37,9 @@ class GatewayConfig(BaseSettings):
     dev_mode: bool = False
     dev_token_secret: str
     database_url: str | None = None
+
+    gemini_api_key: Optional[str] = Field(default_factory=lambda: os.getenv("GEMINI_API_KEY", None))
+    google_model: str = Field(default_factory=lambda: os.getenv("GOOGLE_MODEL", "gemini-3.5-flash"))
 
     # Supabase Storage bucket that holds uploaded scan images.
     # The bucket must exist and have service-role write access.
