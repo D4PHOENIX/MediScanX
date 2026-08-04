@@ -12,6 +12,8 @@ from typing import Any, Dict, Optional
 
 import asyncpg
 
+from app.utils.labels import _ABNORMAL_LABELS, _NORMAL_LABELS
+
 logger: logging.Logger = logging.getLogger(__name__)
 
 # Threshold boundaries for deriving scan_status from confidence scores.
@@ -28,23 +30,38 @@ class ScanPersistenceService:
     """
 
     @staticmethod
-    def derive_scan_status(confidence: float) -> int:
-        """Maps a model confidence score to the ``scan_status`` integer enum.
+    def derive_scan_status(
+        confidence: float,
+        ai_diagnosis: Optional[str] = None,
+        modality: Optional[str] = None,
+    ) -> int:
+        """Maps a model confidence score and diagnosis to the ``scan_status`` integer enum.
 
         The thresholds align with the clinical severity tiers displayed in the
         Flutter UI and used by the LangGraph agent's risk assessment tools.
 
         Args:
             confidence: The top-1 prediction confidence in the range [0.0, 1.0].
+            ai_diagnosis: The predicted clinical finding.
+            modality: The scanning modality (e.g., 'cxr', 'ecg', 'skin').
 
         Returns:
             int: 2 (High Risk), 1 (Warning), or 0 (Normal).
         """
-        if confidence >= _HIGH_RISK_THRESHOLD:
-            return 2  # High Risk
-        if confidence >= _WARNING_THRESHOLD:
-            return 1  # Warning
-        return 0  # Normal
+        if not ai_diagnosis or not modality:
+            return 1
+            
+        if ai_diagnosis in _NORMAL_LABELS.get(modality, set()):
+            return 0
+            
+        if ai_diagnosis in _ABNORMAL_LABELS.get(modality, set()):
+            if confidence >= _HIGH_RISK_THRESHOLD:
+                return 2  # High Risk
+            if confidence >= _WARNING_THRESHOLD:
+                return 1  # Warning
+            return 0  # Normal
+            
+        return 1
 
     @staticmethod
     async def insert_scan_result(

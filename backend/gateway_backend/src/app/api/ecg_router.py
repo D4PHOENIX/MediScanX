@@ -151,7 +151,9 @@ async def ecg_predict(
 
         # Step 3: Derive severity
         confidence: float = float(ml_result.get("confidence", 0.0))
-        scan_status: int = ScanPersistenceService.derive_scan_status(confidence)
+        scan_status: int = ScanPersistenceService.derive_scan_status(
+            confidence, ai_diagnosis=ai_diagnosis, modality="ecg"
+        )
 
         # Step 4: Persist
         try:
