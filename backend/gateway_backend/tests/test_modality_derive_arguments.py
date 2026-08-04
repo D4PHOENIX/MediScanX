@@ -14,7 +14,8 @@ def mock_dependencies():
          patch("app.api.ecg_router.StorageService.upload_scan_image", new_callable=AsyncMock, return_value=("mock_url", "mock_path")), \
          patch("app.api.skin_router.StorageService.upload_scan_image", new_callable=AsyncMock, return_value=("mock_url", "mock_path")), \
          patch("app.services.scan_persistence_service.ScanPersistenceService.derive_scan_status", return_value=1) as mock_derive, \
-         patch("app.main.asyncpg.create_pool", new_callable=AsyncMock) as mock_pool:
+         patch("app.main.asyncpg.create_pool", new_callable=AsyncMock) as mock_pool, \
+         patch("app.core.config.gateway_config.database_url", new="postgresql://dummy:dummy@localhost:5432/dummy"):
         # Configure the db pool mock to handle `async with db_pool.acquire()` and `await db_pool.close()`
         mock_db_pool = MagicMock()
         mock_db_pool.acquire.return_value.__aenter__.return_value = AsyncMock()
