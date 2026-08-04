@@ -11,6 +11,23 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 
+class ExplainabilityInfo(BaseModel):
+    """Nested explainability block attached to scan responses and history items.
+
+    Attributes:
+        status: The ``xai_status`` column value, verbatim.  One of:
+            ``"none"``, ``"generated"``, ``"skipped_edge"``, ``"failed"``.
+        url: The authenticated Supabase Storage URL of the primary XAI overlay
+            image, or ``None``.  Non-null if and only if ``status == 'generated'``.
+        modality: The ``modality`` column value (``'cxr'``, ``'ecg'``, ``'skin'``),
+            or ``None`` where the column is null.
+    """
+
+    status: str
+    url: Optional[str] = None
+    modality: Optional[str] = None
+
+
 class InferenceResponse(BaseModel):
     """Standardized response contract for diagnostic inference results.
 
@@ -188,8 +205,12 @@ class HistoryScanItem(BaseModel):
     confidence: Optional[float] = None
     scan_status: int
     scan_date: Optional[datetime] = None
+    # xai_status is kept as a bare top-level field for backwards compatibility
+    # with existing clients.  New clients should use the nested `explainability`
+    # object, which also carries the authenticated URL and modality.
     xai_status: str
     has_image: bool = Field(..., description="True if storage_path IS NOT NULL")
+    explainability: ExplainabilityInfo
 
 
 class HistoryResponse(BaseModel):
