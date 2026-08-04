@@ -9,6 +9,12 @@ import uuid
 
 client = TestClient(app)
 
+@pytest.fixture(autouse=True)
+def mock_config():
+    with patch("app.api.report_router.gateway_config") as mock_config:
+        mock_config.database_url = "postgresql://mock"
+        yield mock_config
+
 # Test 5: Verify GenerateReportRequest schema does not contain llm_summary
 def test_generate_report_request_schema():
     from app.models.schemas import GenerateReportRequest
