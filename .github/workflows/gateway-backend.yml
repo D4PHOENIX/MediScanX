@@ -62,6 +62,7 @@ jobs:
             SUPABASE_URL: "http://mock-supabase"
             SUPABASE_PUBLISHABLE_KEY: "mock-anon-key"
             SUPABASE_SECRET_KEY: "mock-service-role-key"
+            REPORT_TOKEN_SECRET: "mock-report-token-secret"
 
             # Internal microservice URLs (unreachable in CI — all proxied calls are
             # mocked via httpx patch in the test suite)
@@ -132,6 +133,7 @@ jobs:
                   SUPABASE_URL: "http://mock-supabase"
                   SUPABASE_PUBLISHABLE_KEY: "mock-anon-key"
                   SUPABASE_SECRET_KEY: "mock-service-role-key"
+                  REPORT_TOKEN_SECRET: "mock-report-token-secret"
                   ALLOWED_ORIGINS: "https://test-origin.example.com"
                   CXR_SERVICE_URL: "http://cxr-mock"
                   ECG_SERVICE_URL: "http://ecg-mock"
@@ -201,6 +203,7 @@ jobs:
                     -e SUPABASE_URL=http://mock-supabase \
                     -e SUPABASE_PUBLISHABLE_KEY=mock-anon-key \
                     -e SUPABASE_SECRET_KEY=mock-service-role-key \
+                    -e REPORT_TOKEN_SECRET=mock-report-token-secret \
                     -e CXR_SERVICE_URL=http://cxr-mock \
                     -e ECG_SERVICE_URL=http://ecg-mock \
                     -e SKIN_SERVICE_URL=http://skin-mock \

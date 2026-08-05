@@ -14,6 +14,8 @@ services:
             - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
             - MAX_UPLOAD_BYTES=${MAX_UPLOAD_BYTES}
             - SUPABASE_STORAGE_BUCKET=${SUPABASE_STORAGE_BUCKET}
+            - REPORT_TOKEN_SECRET=${REPORT_TOKEN_SECRET}
+            - CLAIM_BASE_URL=${CLAIM_BASE_URL:-https://mediscanx.app/claim}
         dns:
             - 8.8.8.8
             - 1.1.1.1

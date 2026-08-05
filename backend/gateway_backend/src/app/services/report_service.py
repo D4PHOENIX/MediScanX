@@ -366,9 +366,21 @@ class ReportGenerator:
         if not signed_url:
             raise RuntimeError("Could not create signed URL from Supabase")
 
-        # 3. Build the final QR image encoding the signed URL
+        # 3. Build the JWT token and the final QR image encoding the claim URL
+        from jose import jwt
+        from datetime import datetime, timedelta
+        
+        token_payload = {
+            "sub": patient_id,
+            "scan_ids": [m.get("id") for m in scan_metadata],
+            "exp": datetime.utcnow() + timedelta(hours=1),
+            "purpose": "report_claim"
+        }
+        token = jwt.encode(token_payload, gateway_config.report_token_secret, algorithm="HS256")
+        claim_url = f"{gateway_config.claim_base_url}?token={token}"
+
         qr = qrcode.QRCode(version=1, box_size=10, border=4)
-        qr.add_data(signed_url)
+        qr.add_data(claim_url)
         qr.make(fit=True)
         qr_img = qr.make_image(fill_color="black", back_color="white")
 
