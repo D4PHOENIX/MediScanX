@@ -61,9 +61,8 @@ class SkinEngine:
             self.cfg, model, preprocessor, xai_engine
         )
         self._model = model
-
     async def predict(
-        self, image_path: str, top_k: int = 3
+        self, image_path: str, top_k: int = 3, use_gradcam: bool = True
     ) -> Dict[str, Any]:
         """Run a full diagnostic pass asynchronously on a given image.
 
@@ -81,4 +80,4 @@ class SkinEngine:
             raise RuntimeError(
                 "SkinEngine is not initialised – call await engine.initialize() first"
             )
-        return await self._diagnostic_engine.async_run_diagnostic(image_path, top_k)
+        return await self._diagnostic_engine.async_run_diagnostic(image_path, top_k, use_gradcam)

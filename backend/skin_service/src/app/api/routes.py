@@ -2,7 +2,7 @@ import os
 import tempfile
 from pathlib import Path
 from typing import Dict, Any, Set, Optional
-from fastapi import APIRouter, File, UploadFile, Depends
+from fastapi import APIRouter, File, UploadFile, Depends, Query
 from fastapi.responses import JSONResponse
 from app.core.exceptions import SkinEngineNotReadyError, SkinBaseException
 from app.engine.skin_engine import SkinEngine
@@ -42,7 +42,7 @@ async def healthz() -> Dict[str, str]:
 
 
 @router.post("/predict")
-async def predict(file: UploadFile = File(...), engine: SkinEngine = Depends(get_engine), top_k: int = 3) -> JSONResponse:
+async def predict(file: UploadFile = File(...), engine: SkinEngine = Depends(get_engine), top_k: int = 3, xai: bool = Query(default=True, description="Set to true to include a base64-encoded Grad-CAM overlay.")) -> JSONResponse:
     """Accept a skin lesion image, run inference, and return diagnostic findings.
     
     Accepts an uploaded image file, processes it, and generates predictions and Grad-CAM overlays
@@ -77,7 +77,7 @@ async def predict(file: UploadFile = File(...), engine: SkinEngine = Depends(get
         # Delegate to the asynchronous inference wrapper.
         # Domain errors propagate through the registered exception handlers
         # and are automatically translated into safe JSON responses.
-        result: Dict[str, Any] = await engine.predict(tmp_path, top_k=top_k)
+        result: Dict[str, Any] = await engine.predict(tmp_path, top_k=top_k, use_gradcam=xai)
         return JSONResponse(content=result)
     finally:
         try:

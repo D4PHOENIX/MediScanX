@@ -73,7 +73,7 @@ async def test_skin_predict_valid_input(auth_headers):
     response = client.post(
         "/api/v1/skin/predict",
         files={"file": ("skin.jpg", b"fake_skin_data", "image/jpeg")},
-        data={"top_k": 3},
+        data={"top_k": 1},
         headers=auth_headers,
     )
     assert mock_client.post.called
@@ -89,7 +89,7 @@ async def test_skin_predict_valid_input(auth_headers):
     assert url == f"{gateway_config.skin_service_url}/predict"
     assert "file" in call_args.kwargs["files"]
     assert call_args.kwargs["files"]["file"][1] == b"fake_skin_data"
-    assert call_args.kwargs["data"]["top_k"] == "3" or call_args.kwargs["data"]["top_k"] == 3
+    assert call_args.kwargs["data"]["top_k"] == "1" or call_args.kwargs["data"]["top_k"] == 1
 
 
 @pytest.mark.asyncio
@@ -97,7 +97,7 @@ async def test_skin_predict_missing_file(auth_headers):
     """Test malformed/missing input: it should return the right 4xx status."""
     response = client.post(
         "/api/v1/skin/predict",
-        data={"top_k": 3},
+        data={"top_k": 1},
         headers=auth_headers,
     )
     assert response.status_code == 422
@@ -134,7 +134,7 @@ async def test_skin_predict_upstream_error(auth_headers):
     response = client.post(
         "/api/v1/skin/predict",
         files={"file": ("skin.jpg", b"fake", "image/jpeg")},
-        data={"top_k": 3},
+        data={"top_k": 1},
         headers=auth_headers,
     )
     assert response.status_code == 503
@@ -410,3 +410,41 @@ async def test_skin_metadata_size_bounded(auth_headers, fake_ml_data) -> None:
         metadata = mock_insert.call_args.kwargs["metadata"]
         metadata_str = json.dumps(metadata)
         assert len(metadata_str) < 4096
+
+@pytest.mark.asyncio
+async def test_skin_xai_false(auth_headers) -> None:
+    from unittest.mock import patch
+    
+    mock_client = AsyncMock()
+    mock_response = MagicMock(spec=Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "predicted_class": "Melanoma",
+        "top_findings": [{"label": "Melanoma", "confidence": 0.95}]
+    }
+    mock_client.post.return_value = mock_response
+    app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
+    
+    with patch("app.api.skin_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.skin_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage:
+        
+        mock_storage.return_value = ("url_main", "user123/scan456.png")
+        
+        response = client.post("/api/v1/skin/predict", headers=auth_headers,
+            files={"file": ("skin.jpg", b"data", "image/jpeg")},
+            data={"top_k": 1, "xai": "false"},
+        )
+        
+        assert mock_client.post.call_args.kwargs["params"] == {"xai": "false"}
+        assert response.status_code == 200
+        
+        # mock_storage should be called ONCE (for the main image), not for overlay
+        assert mock_storage.call_count == 1
+        
+        kwargs = mock_insert.call_args.kwargs
+        assert kwargs["xai_status"] == "none"
+        assert kwargs.get("xai_path") is None
+        assert response.json()["explainability"]["status"] == "none"
+        assert response.json()["explainability"]["url"] is None

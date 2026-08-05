@@ -2,7 +2,7 @@ import os
 import tempfile
 from pathlib import Path
 from typing import Dict, Any, Set, Optional
-from fastapi import APIRouter, File, UploadFile, Depends
+from fastapi import APIRouter, File, UploadFile, Depends, Query
 from fastapi.responses import JSONResponse
 from app.core.exceptions import CXREngineNotReadyError, CXRBaseException
 from app.engine.cxr_engine import CXREngine
@@ -41,7 +41,7 @@ async def healthz() -> Dict[str, str]:
     return {"status": "healthy"}
 
 @router.post("/predict")
-async def predict(file: UploadFile = File(...), engine: CXREngine = Depends(get_engine), top_k: int = 5) -> JSONResponse:
+async def predict(file: UploadFile = File(...), engine: CXREngine = Depends(get_engine), top_k: int = 5, xai: bool = Query(default=True, description="Set to true to include a base64-encoded Grad-CAM overlay.")) -> JSONResponse:
     """Accept a chest X-ray image, run inference, and return diagnostic findings.
     
     Accepts an uploaded image file, processes it, and generates predictions and Grad-CAM++ overlays
@@ -76,7 +76,7 @@ async def predict(file: UploadFile = File(...), engine: CXREngine = Depends(get_
         # Delegate to the asynchronous inference wrapper.
         # Domain errors propagate through the registered exception handlers
         # and are automatically translated into safe JSON responses.
-        result: Dict[str, Any] = await engine.predict(tmp_path, top_k=top_k)
+        result: Dict[str, Any] = await engine.predict(tmp_path, top_k=top_k, use_gradcam=xai)
         return JSONResponse(content=result)
     finally:
         try:

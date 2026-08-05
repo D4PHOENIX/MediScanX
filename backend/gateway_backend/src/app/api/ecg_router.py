@@ -39,7 +39,8 @@ _SCAN_TYPE_ECG: int = 0
 async def ecg_predict(
     request: Request,
     file: UploadFile = File(...),
-    top_k: int = Form(3),
+    top_k: int = Form(1),
+    xai: bool = Form(True),
     patient_id: Optional[str] = Form(None),
     doctor_id: Optional[str] = Form(None),
     user_id: str = Depends(get_current_user),
@@ -99,6 +100,7 @@ async def ecg_predict(
                 )
             },
             data={"top_k": top_k},
+            params={"xai": "true" if xai else "false"},
             timeout=Timeout(30.0),
         )
         resp.raise_for_status()

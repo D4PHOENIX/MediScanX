@@ -111,7 +111,11 @@ async def _post_to_service(url: str, scan_id: uuid.UUID, auth_user_id: str) -> D
 
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
-            resp = await client.post(url, files=files_payload)
+            resp = await client.post(
+                url,
+                files=files_payload,
+                params={"top_k": 1, "xai": "false"}
+            )
             resp.raise_for_status()
             return resp.json()
     except httpx.HTTPStatusError as exc:

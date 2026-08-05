@@ -27,7 +27,7 @@ async def test_cxr_stream_proxying(auth_headers) -> None:
     try:
         response = client.post("/api/v1/cxr/predict", headers=auth_headers,
             files={"file": ("xray.jpg", b"fake_binary_image_data", "image/jpeg")},
-            data={"top_k": 3},
+            data={"top_k": 1},
         )
     finally:
         pass
@@ -52,7 +52,7 @@ async def test_cxr_persists_expected_modality(auth_headers) -> None:
         mock_storage.return_value = ("url", "path")
         response = client.post("/api/v1/cxr/predict", headers=auth_headers,
             files={"file": ("xray.jpg", b"data", "image/jpeg")},
-            data={"top_k": 3},
+            data={"top_k": 1},
         )
         assert response.status_code == 200
         assert mock_insert.called
@@ -98,7 +98,7 @@ async def test_upstream_service_error_envelope(auth_headers) -> None:
     try:
         response = client.post("/api/v1/cxr/predict", headers=auth_headers,
             files={"file": ("xray.jpg", b"fake", "image/jpeg")},
-            data={"top_k": 3},
+            data={"top_k": 1},
 
         )
     finally:
@@ -158,7 +158,7 @@ async def test_cxr_overlay_objects_land_in_expected_path(auth_headers, fake_ml_d
         
         client.post("/api/v1/cxr/predict", headers=auth_headers,
             files={"file": ("xray.jpg", b"data", "image/jpeg")},
-            data={"top_k": 3},
+            data={"top_k": 1},
         )
         
         overlay_call_kwargs = mock_storage.call_args_list[0].kwargs
@@ -198,7 +198,7 @@ async def test_cxr_compensating_delete_on_persistence_failure(auth_headers, fake
         with pytest.raises(RuntimeError, match="Database is down"):
             client.post("/api/v1/cxr/predict", headers=auth_headers,
                 files={"file": ("xray.jpg", b"data", "image/jpeg")},
-                data={"top_k": 3},
+                data={"top_k": 1},
             )
             
         assert mock_delete.call_count == 1
@@ -234,7 +234,7 @@ async def test_cxr_compensating_delete_failure_propagates_original_exception(aut
         with pytest.raises(RuntimeError, match="Database is down"):
             client.post("/api/v1/cxr/predict", headers=auth_headers,
                 files={"file": ("xray.jpg", b"data", "image/jpeg")},
-                data={"top_k": 3},
+                data={"top_k": 1},
             )
             
         assert mock_delete.call_count == 1
@@ -258,7 +258,7 @@ async def test_cxr_metadata_contains_no_large_base64_strings(auth_headers, fake_
         
         mock_storage.side_effect = [("url_o", "path_o"), ("url_m", "path_m")]
         client.post("/api/v1/cxr/predict", headers=auth_headers,
-            files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 3},
+            files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 1},
         )
         
         metadata = mock_insert.call_args.kwargs["metadata"]
@@ -283,7 +283,7 @@ async def test_cxr_top_findings_retains_metadata_after_swap(auth_headers, fake_m
         
         mock_storage.side_effect = [("url_o", "path_o"), ("url_m", "path_m")]
         client.post("/api/v1/cxr/predict", headers=auth_headers,
-            files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 3},
+            files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 1},
         )
         
         metadata = mock_insert.call_args.kwargs["metadata"]
@@ -311,7 +311,7 @@ async def test_cxr_original_img_is_absent_from_metadata(auth_headers, fake_ml_da
         
         mock_storage.side_effect = [("url_o", "path_o"), ("url_m", "path_m")]
         client.post("/api/v1/cxr/predict", headers=auth_headers,
-            files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 3},
+            files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 1},
         )
         
         metadata = mock_insert.call_args.kwargs["metadata"]
@@ -342,7 +342,7 @@ async def test_cxr_overlay_upload_failure(auth_headers, fake_ml_data) -> None:
         
         response = client.post("/api/v1/cxr/predict", headers=auth_headers,
             files={"file": ("xray.jpg", b"data", "image/jpeg")},
-            data={"top_k": 3},
+            data={"top_k": 1},
         )
         
         assert response.status_code == 200
@@ -377,7 +377,7 @@ async def test_cxr_no_overlays(auth_headers) -> None:
         
         response = client.post("/api/v1/cxr/predict", headers=auth_headers,
             files={"file": ("xray.jpg", b"data", "image/jpeg")},
-            data={"top_k": 3},
+            data={"top_k": 1},
         )
         
         assert response.status_code == 200
@@ -414,7 +414,7 @@ async def test_cxr_ai_diagnosis_from_top_findings_invariant(auth_headers) -> Non
         }
         
         client.post("/api/v1/cxr/predict", headers=auth_headers,
-            files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 3})
+            files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 1})
         
         kwargs = mock_insert.call_args.kwargs
         # Assert ai_diagnosis matches the higher-confidence label
@@ -432,7 +432,7 @@ async def test_cxr_ai_diagnosis_from_top_findings_invariant(auth_headers) -> Non
         }
         
         client.post("/api/v1/cxr/predict", headers=auth_headers,
-            files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 3})
+            files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 1})
         
         kwargs = mock_insert.call_args.kwargs
         assert kwargs["ai_diagnosis"] == "Normal"
@@ -447,7 +447,7 @@ async def test_cxr_ai_diagnosis_from_top_findings_invariant(auth_headers) -> Non
         }
         
         client.post("/api/v1/cxr/predict", headers=auth_headers,
-            files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 3})
+            files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 1})
         
         kwargs = mock_insert.call_args.kwargs
         # Assert fallback is None and 0.0
@@ -466,8 +466,47 @@ async def test_cxr_ai_diagnosis_from_top_findings_invariant(auth_headers) -> Non
         }
         
         client.post("/api/v1/cxr/predict", headers=auth_headers,
-            files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 3})
+            files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 1})
         
         kwargs = mock_insert.call_args.kwargs
         assert kwargs["ai_diagnosis"] == "Edema"
         assert kwargs["confidence"] == 0.999
+
+@pytest.mark.asyncio
+async def test_cxr_xai_false(auth_headers) -> None:
+    from unittest.mock import patch
+    
+    mock_client = AsyncMock()
+    mock_response = MagicMock(spec=Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "predicted_diagnoses": ["Pneumonia"],
+        "original_img": "data:image/png;base64,123",
+        "top_findings": [{"label": "Pneumonia", "confidence": 0.95, "class_idx": 4}]
+    }
+    mock_client.post.return_value = mock_response
+    app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
+    
+    with patch("app.api.cxr_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.cxr_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage:
+        
+        mock_storage.return_value = ("url_main", "user123/scan456.png")
+        
+        response = client.post("/api/v1/cxr/predict", headers=auth_headers,
+            files={"file": ("xray.jpg", b"data", "image/jpeg")},
+            data={"top_k": 1, "xai": "false"},
+        )
+        
+        assert mock_client.post.call_args.kwargs["params"] == {"xai": "false"}
+        assert response.status_code == 200
+        
+        # mock_storage should be called ONCE (for the main image), not for overlay
+        assert mock_storage.call_count == 1
+        
+        kwargs = mock_insert.call_args.kwargs
+        assert kwargs["xai_status"] == "none"
+        assert kwargs.get("xai_path") is None
+        assert response.json()["explainability"]["status"] == "none"
+        assert response.json()["explainability"]["url"] is None
