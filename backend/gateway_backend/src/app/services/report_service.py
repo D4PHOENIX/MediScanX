@@ -11,17 +11,22 @@ import hashlib
 import io
 import os
 from typing import Optional, Tuple, List, Dict, Any
+import logging
+from datetime import datetime
 
 import qrcode
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import inch
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as RLImage
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as RLImage, Table, TableStyle, PageBreak
 from app.utils.xai_utils import build_xai_authenticated_url
 import httpx
 from app.core.config import gateway_config
 from app.services.llm_service import generate_hedged_text
 from app.utils.labels import _ABNORMAL_LABELS, _NORMAL_LABELS
+
+logger = logging.getLogger(__name__)
 
 def _get_status(label: Optional[str], mod: Optional[str]) -> str:
     if not label or not mod:
@@ -65,7 +70,7 @@ class ReportGenerator:
             rows: List[asyncpg.Record] = await conn.fetch(
                 """
                 SELECT scan_id, modality, ai_diagnosis, confidence, scan_date,
-                       xai_status, xai_path
+                       xai_status, xai_path, storage_path
                 FROM scan_results
                 WHERE scan_id = ANY($1::uuid[])
                   AND (user_id = $2::uuid OR EXISTS (
@@ -93,6 +98,7 @@ class ReportGenerator:
                     "timestamp": row["scan_date"].isoformat() if row["scan_date"] else "N/A",
                     "xai_status": row["xai_status"],
                     "xai_path": row["xai_path"],
+                    "storage_path": row["storage_path"],
                 }
             )
         return scan_metadata
@@ -102,27 +108,11 @@ class ReportGenerator:
         patient_id: str,
         scan_metadata: List[Dict[str, Any]],
         xai_images: Dict[str, bytes],
+        original_images: Dict[str, bytes],
         ai_summary: Optional[str] = None,
         qr_img: Optional[Any] = None,
     ) -> bytes:
-        """Constructs the PDF document layout and renders it to a byte stream.
-
-        Assembles the clinical report using ReportLab platypus elements,
-        structuring the document with standard margins, typographically distinct
-        headings, organized metadata sections, and optional embedded imagery.
-
-        Args:
-            patient_id (str): The unique identifier assigned to the patient.
-            scan_metadata (List[Dict[str, Any]]): A collection of dictionaries containing
-                metadata for the relevant diagnostic scans (e.g., modality, class).
-            xai_images (Dict[str, bytes]): Mapping of scan_id to XAI image bytes.
-            ai_summary (Optional[str], optional): Generated clinical summary text. Defaults to None.
-            qr_img (Optional[Any], optional): A PIL Image object representing the
-                access QR code to be embedded in the report. Defaults to None.
-
-        Returns:
-            bytes: The fully rendered PDF document as a byte array.
-        """
+        """Constructs the PDF document layout and renders it to a byte stream."""
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(
             buffer,
@@ -135,12 +125,32 @@ class ReportGenerator:
         styles = getSampleStyleSheet()
         title_style = styles["Title"]
         body_style = styles["BodyText"]
+        caption_style = ParagraphStyle(
+            'Caption',
+            parent=styles['Italic'],
+            fontSize=9,
+            alignment=1,
+            spaceAfter=12
+        )
         story = []
 
+        # Header
         story.append(Paragraph("MediScanX Clinical Report", title_style))
-        story.append(Spacer(1, 0.2 * inch))
-        story.append(Paragraph(f"Patient ID: {patient_id}", body_style))
         story.append(Spacer(1, 0.1 * inch))
+        
+        header_data = [
+            [Paragraph(f"<b>Patient ID:</b> {patient_id}", body_style)],
+            [Paragraph(f"<b>Generated On:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", body_style)],
+            [Paragraph(f"<b>Scans Included:</b> {len(scan_metadata)}", body_style)]
+        ]
+        header_table = Table(header_data, colWidths=[6.5 * inch])
+        header_table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+            ('TOPPADDING', (0, 0), (-1, -1), 2),
+        ]))
+        story.append(header_table)
+        story.append(Spacer(1, 0.2 * inch))
 
         if ai_summary is not None:
             story.append(Paragraph("AI-Generated Clinical Summary", styles["Heading3"]))
@@ -148,53 +158,101 @@ class ReportGenerator:
             story.append(Paragraph(ai_summary, body_style))
             story.append(Spacer(1, 0.05 * inch))
             disclaimer_text = "This summary is AI-generated and may be incomplete or inaccurate. It is not a diagnosis. Discuss these results with a qualified clinician."
-            disclaimer_style = styles["Italic"]
-            story.append(Paragraph(disclaimer_text, disclaimer_style))
-            story.append(Spacer(1, 0.1 * inch))
-
-        # Scan metadata section
-        story.append(Paragraph("Diagnostic Summary:", body_style))
-        story.append(Spacer(1, 0.1 * inch))
-        for m in scan_metadata:
-            scan_id = m.get('id', '?')
-            confidence = m.get('confidence')
-            conf_str = f"{confidence:.2f}" if confidence is not None else "N/A"
-            scan_text = (
-                f"<b>Scan ID:</b> {scan_id}<br/>"
-                f"<b>Modality:</b> {m.get('modality', 'N/A')}<br/>"
-                f"<b>Diagnosis:</b> {m.get('ai_diagnosis', 'N/A')}<br/>"
-                f"<b>Confidence:</b> {conf_str}<br/>"
-                f"<b>Timestamp:</b> {m.get('timestamp', 'N/A')}"
-            )
-            story.append(Paragraph(scan_text, body_style))
-            story.append(Spacer(1, 0.05 * inch))
-            
-            xai_status = m.get('xai_status')
-            if xai_status == 'generated':
-                img_bytes = xai_images.get(scan_id)
-                if img_bytes:
-                    img_buffer = io.BytesIO(img_bytes)
-                    rl_image = RLImage(img_buffer, width=4 * inch, height=4 * inch)
-                    story.append(rl_image)
-                else:
-                    story.append(Paragraph("<i>Heatmap available but failed to load.</i>", body_style))
-            else:
-                story.append(Paragraph(f"<i>No heatmap is available for this scan (status: {xai_status}).</i>", body_style))
-                
+            story.append(Paragraph(disclaimer_text, styles["Italic"]))
             story.append(Spacer(1, 0.2 * inch))
 
-        # QR code (if provided)
+        # Scan metadata section
+        story.append(Paragraph("Diagnostic Summary:", styles["Heading3"]))
+        story.append(Spacer(1, 0.1 * inch))
+        
+        for i, m in enumerate(scan_metadata):
+            if i > 0:
+                story.append(PageBreak())
+                
+            scan_id = m.get('id', '?')
+            confidence = m.get('confidence')
+            conf_str = f"{confidence * 100:.0f}%" if confidence is not None else "N/A"
+            
+            scan_table_data = [
+                ["Modality", m.get('modality', 'N/A').upper()],
+                ["Diagnosis", m.get('ai_diagnosis', 'N/A')],
+                ["Confidence", conf_str],
+                ["Timestamp", m.get('timestamp', 'N/A')],
+                ["Scan ID", scan_id]
+            ]
+            scan_table = Table(scan_table_data, colWidths=[1.5 * inch, 4.5 * inch])
+            scan_table.setStyle(TableStyle([
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ('BACKGROUND', (0, 0), (0, -1), colors.lightgrey),
+                ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+                ('PADDING', (0, 0), (-1, -1), 6),
+            ]))
+            story.append(scan_table)
+            story.append(Spacer(1, 0.2 * inch))
+            
+            # Images
+            images_data = []
+            captions_data = []
+            
+            storage_path = m.get('storage_path')
+            orig_img_bytes = original_images.get(scan_id)
+            if orig_img_bytes:
+                img_buffer = io.BytesIO(orig_img_bytes)
+                rl_image = RLImage(img_buffer, width=3 * inch, height=3 * inch)
+                images_data.append(rl_image)
+                captions_data.append(Paragraph("Original Scan Image", caption_style))
+            elif storage_path:
+                images_data.append(Paragraph("<i>Original image failed to load.</i>", body_style))
+                captions_data.append(Paragraph("", caption_style))
+                
+            xai_status = m.get('xai_status')
+            if xai_status == 'generated':
+                xai_img_bytes = xai_images.get(scan_id)
+                if xai_img_bytes:
+                    img_buffer = io.BytesIO(xai_img_bytes)
+                    rl_image = RLImage(img_buffer, width=3 * inch, height=3 * inch)
+                    images_data.append(rl_image)
+                    captions_data.append(Paragraph("AI attention map — highlighted regions most influenced the model's assessment.", caption_style))
+                else:
+                    images_data.append(Paragraph("<i>Heatmap available but failed to load.</i>", body_style))
+                    captions_data.append(Paragraph("", caption_style))
+            else:
+                images_data.append(Paragraph(f"<i>No heatmap is available for this scan (status: {xai_status}).</i>", body_style))
+                captions_data.append(Paragraph("", caption_style))
+                
+            if images_data:
+                if len(images_data) == 2:
+                    img_table = Table([images_data, captions_data], colWidths=[3.2 * inch, 3.2 * inch])
+                    img_table.setStyle(TableStyle([
+                        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                    ]))
+                    story.append(img_table)
+                else:
+                    for img, cap in zip(images_data, captions_data):
+                        story.append(img)
+                        story.append(cap)
+            
+            story.append(Spacer(1, 0.2 * inch))
+
         if qr_img is not None:
+            story.append(Spacer(1, 0.3 * inch))
             qr_buffer = io.BytesIO()
-            # qr_img is a PIL Image; convert to PNG bytes in memory
             qr_img.save(qr_buffer, format="PNG")
             qr_buffer.seek(0)
-            rl_image = RLImage(qr_buffer, width=2 * inch, height=2 * inch)
+            rl_image = RLImage(qr_buffer, width=1.5 * inch, height=1.5 * inch)
             story.append(rl_image)
-            story.append(Spacer(1, 0.1 * inch))
-            story.append(Paragraph("Scan the QR code to access the report online", body_style))
+            story.append(Spacer(1, 0.05 * inch))
+            story.append(Paragraph("Scan the QR code to access the report online", styles["Italic"]))
 
-        doc.build(story)
+        def add_footer(canvas, doc):
+            canvas.saveState()
+            canvas.setFont('Helvetica', 9)
+            footer_text = f"Page {doc.page} | This document was produced by an AI diagnostic aid."
+            canvas.drawString(inch, 0.75 * inch, footer_text)
+            canvas.restoreState()
+
+        doc.build(story, onFirstPage=add_footer, onLaterPages=add_footer)
         return buffer.getvalue()
 
     async def generate_qr_report(
@@ -228,24 +286,30 @@ class ReportGenerator:
             raise RuntimeError("supabase_client must be provided")
         bucket = supabase_client.storage.from_("medical_reports")
 
-        # 0. Fetch XAI images
+        # 0. Fetch Original and XAI images
         xai_images: Dict[str, bytes] = {}
-        async with httpx.AsyncClient() as http_client:
-            for m in scan_metadata:
-                if m.get("xai_status") == "generated":
-                    xai_url = build_xai_authenticated_url(m.get("xai_path"))
-                    if xai_url:
-                        # Use service role key to bypass user token context
-                        try:
-                            resp = await http_client.get(
-                                xai_url,
-                                headers={"Authorization": f"Bearer {gateway_config.supabase_secret_key}"},
-                                timeout=10.0
-                            )
-                            if resp.status_code == 200:
-                                xai_images[m.get("id")] = resp.content
-                        except Exception:
-                            pass
+        original_images: Dict[str, bytes] = {}
+        img_bucket = gateway_config.supabase_storage_bucket
+
+        for m in scan_metadata:
+            scan_id = m.get("id")
+            
+            # Fetch original image
+            storage_path = m.get("storage_path")
+            if storage_path:
+                try:
+                    img_data = await supabase_client.storage.from_(img_bucket).download(storage_path)
+                    original_images[scan_id] = img_data
+                except Exception as e:
+                    logger.warning(f"Failed to fetch original image at {storage_path}: {e}")
+                    
+            # Fetch XAI heatmap
+            if m.get("xai_status") == "generated" and m.get("xai_path"):
+                try:
+                    xai_data = await supabase_client.storage.from_(img_bucket).download(m.get("xai_path"))
+                    xai_images[scan_id] = xai_data
+                except Exception as e:
+                    logger.warning(f"Failed to fetch XAI heatmap at {m.get('xai_path')}: {e}")
 
         # 0.5 Generate AI Summary
         ai_summary = None
@@ -269,7 +333,7 @@ class ReportGenerator:
             ai_summary = await generate_hedged_text(prompt)
 
         # 1. Stage PDF without QR (so we can generate a signed URL)
-        stage_pdf = self._build_pdf_story(patient_id, scan_metadata, xai_images, ai_summary=ai_summary)
+        stage_pdf = self._build_pdf_story(patient_id, scan_metadata, xai_images, original_images, ai_summary=ai_summary)
         storage_path = f"{patient_id}_report.pdf"
 
         await bucket.upload(
@@ -294,7 +358,7 @@ class ReportGenerator:
         qr_img = qr.make_image(fill_color="black", back_color="white")
 
         # 4. Build the final PDF that includes the QR image
-        final_pdf = self._build_pdf_story(patient_id, scan_metadata, xai_images, ai_summary=ai_summary, qr_img=qr_img)
+        final_pdf = self._build_pdf_story(patient_id, scan_metadata, xai_images, original_images, ai_summary=ai_summary, qr_img=qr_img)
 
         # 5. Replace the placeholder object with the final PDF using x-upsert
         await bucket.upload(
