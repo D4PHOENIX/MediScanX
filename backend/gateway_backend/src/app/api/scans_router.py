@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from app.core.security import get_current_user
 from app.models.domain import ScanModality
-from app.models.schemas import ExplainabilityInfo, HistoryResponse, HistoryScanItem, TrendResponse, TrendTransition  # noqa: F401
+from app.models.schemas import ExplainabilityInfo, HistoryResponse, HistoryScanItem, TrendResponse, TrendTransition, ClaimRequest, ClaimResponse  # noqa: F401
 from app.utils.labels import _ABNORMAL_LABELS, _NORMAL_LABELS  # noqa: F401
 from app.utils.xai_utils import build_xai_authenticated_url  # noqa: F401
 from app.services.scans_service import ScansService
@@ -132,8 +132,65 @@ async def get_trends(
         return await ScansService.get_trends(db_pool, user_uuid, modality, limit)
     except asyncpg.PostgresError as e:
         import logging
-
         logging.getLogger(__name__).error("Database failure in /trends: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database query failed"
+        ) from e
+
+@router.post(
+    "/claim",
+    response_model=ClaimResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Claim a clinical report via QR token.",
+)
+async def claim_report_endpoint(
+    payload: ClaimRequest,
+    request: Request,
+    user_id: str = Depends(get_current_user),
+) -> ClaimResponse:
+    db_pool: asyncpg.Pool | None = request.app.state.db_pool
+    if not db_pool:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database connection pool unavailable.",
+        )
+
+    supabase_client = request.app.state.supabase_client
+
+    try:
+        return await ScansService.claim_report(db_pool, supabase_client, payload.token, user_id)
+    except asyncpg.PostgresError as e:
+        import logging
+        logging.getLogger(__name__).error("Database failure in /claim: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database query failed"
+        ) from e
+
+
+@router.get(
+    "/triage",
+    response_model=HistoryResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Triage list of scans for patients the doctor has access to.",
+)
+async def get_triage_endpoint(
+    request: Request,
+    limit: int = Query(20, ge=1, le=100, description="Max scans to return"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    user_id: str = Depends(get_current_user),
+) -> HistoryResponse:
+    db_pool: asyncpg.Pool | None = request.app.state.db_pool
+    if not db_pool:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database connection pool unavailable.",
+        )
+
+    try:
+        return await ScansService.get_triage(db_pool, user_id, limit, offset)
+    except asyncpg.PostgresError as e:
+        import logging
+        logging.getLogger(__name__).error("Database failure in /triage: %s", e)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database query failed"
         ) from e

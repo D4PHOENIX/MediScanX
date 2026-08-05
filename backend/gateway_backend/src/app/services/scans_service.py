@@ -1,5 +1,5 @@
 import uuid
-from typing import Optional
+from typing import Optional, Any
 import asyncpg
 
 from app.models.schemas import HistoryScanItem, ExplainabilityInfo, TrendTransition, HistoryResponse, TrendResponse
@@ -203,3 +203,202 @@ class ScansService:
             )
 
         return TrendResponse(scans=scans, transitions=transitions)
+
+    @staticmethod
+    async def claim_report(
+        db_pool: asyncpg.Pool,
+        supabase_client: Any,
+        token: str,
+        caller_id: str
+    ) -> "ClaimResponse":
+        from fastapi import HTTPException
+        from jose import jwt, JWTError, ExpiredSignatureError
+        from app.core.config import gateway_config
+        from app.models.schemas import ClaimResponse
+        from datetime import datetime, timedelta, timezone
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        try:
+            payload = jwt.decode(token, gateway_config.report_token_secret, algorithms=["HS256"])
+        except ExpiredSignatureError:
+            raise HTTPException(status_code=403, detail="Token has expired. Please request a fresh QR code.")
+        except JWTError:
+            raise HTTPException(status_code=403, detail="Invalid token signature.")
+
+        if payload.get("purpose") != "report_claim":
+            raise HTTPException(status_code=403, detail="Invalid token purpose.")
+
+        patient_id = payload.get("sub")
+        if not patient_id:
+            raise HTTPException(status_code=403, detail="Token missing subject.")
+
+        # Always prepare the report URL to return, even if access is not granted.
+        report_path = f"{patient_id}_report.pdf"
+        try:
+            signed_resp = await supabase_client.storage.from_("medical_reports").create_signed_url(report_path, 60 * 60 * 24)
+            report_url = signed_resp.get("signedURL") or signed_resp.get("signedUrl")
+            if not report_url:
+                raise ValueError("Could not get signed URL.")
+        except Exception as e:
+            logger.error(f"Failed to sign report URL: {e}")
+            raise HTTPException(status_code=500, detail="Failed to retrieve report URL.")
+
+        if caller_id == patient_id:
+            return ClaimResponse(
+                report_url=report_url,
+                access_granted=False,
+                patient_ref=None,
+                access_expires_at=None,
+                reason=None
+            )
+
+        async with db_pool.acquire() as conn:
+            # Check if caller is a doctor
+            is_doctor = await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM doctor_profiles WHERE user_id = $1)",
+                uuid.UUID(caller_id)
+            )
+            if not is_doctor:
+                return ClaimResponse(
+                    report_url=report_url,
+                    access_granted=False,
+                    patient_ref=None,
+                    access_expires_at=None,
+                    reason=None
+                )
+
+            # Check existing care relationship
+            row = await conn.fetchrow(
+                "SELECT status, ended_at FROM care_relationships WHERE doctor_id = $1 AND patient_id = $2",
+                uuid.UUID(caller_id),
+                uuid.UUID(patient_id)
+            )
+
+            access_granted = False
+            reason = None
+            expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+
+            if row:
+                status = row["status"]
+                ended_at = row["ended_at"]
+
+                if ended_at is not None:
+                    logger.warning(f"Care relationship for {patient_id} and {caller_id} was ended at {ended_at}. Denying QR claim.")
+                    reason = "revoked"
+                elif status == "active":
+                    await conn.execute(
+                        "UPDATE care_relationships SET expires_at = $1 WHERE doctor_id = $2 AND patient_id = $3",
+                        expires_at, uuid.UUID(caller_id), uuid.UUID(patient_id)
+                    )
+                    access_granted = True
+                elif status == "pending":
+                    await conn.execute(
+                        "UPDATE care_relationships SET status = 'active', activated_at = now(), expires_at = $1 WHERE doctor_id = $2 AND patient_id = $3",
+                        expires_at, uuid.UUID(caller_id), uuid.UUID(patient_id)
+                    )
+                    access_granted = True
+                elif status == "revoked":
+                    reason = "revoked"
+                elif status == "declined":
+                    reason = "declined"
+                else:
+                    logger.warning(f"Unknown status {status} for care relationship between {patient_id} and {caller_id}.")
+                    reason = "unknown_status"
+            else:
+                await conn.execute(
+                    """
+                    INSERT INTO care_relationships (patient_id, doctor_id, status, initiated_by, note, created_at, activated_at, expires_at)
+                    VALUES ($1, $2, 'active', $3, 'QR claim', now(), now(), $4)
+                    """,
+                    uuid.UUID(patient_id), uuid.UUID(caller_id), uuid.UUID(caller_id), expires_at
+                )
+                access_granted = True
+
+            patient_ref = f"PT-{patient_id[:6].upper()}"
+
+            if access_granted:
+                return ClaimResponse(
+                    report_url=report_url,
+                    access_granted=True,
+                    patient_ref=patient_ref,
+                    access_expires_at=expires_at,
+                    reason=None
+                )
+            else:
+                return ClaimResponse(
+                    report_url=report_url,
+                    access_granted=False,
+                    patient_ref=None,
+                    access_expires_at=None,
+                    reason=reason
+                )
+
+    @staticmethod
+    async def get_triage(
+        db_pool: asyncpg.Pool,
+        caller_id: str,
+        limit: int,
+        offset: int
+    ) -> "HistoryResponse":
+        from app.models.schemas import HistoryResponse, HistoryScanItem, ExplainabilityInfo
+        from app.utils.xai_utils import build_xai_authenticated_url
+
+        async with db_pool.acquire() as conn:
+            is_doctor = await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM doctor_profiles WHERE user_id = $1)",
+                uuid.UUID(caller_id)
+            )
+            if not is_doctor:
+                return HistoryResponse(total_count=0, items=[])
+
+            query = """
+                SELECT 
+                    s.scan_id, s.modality, s.ai_diagnosis, s.confidence, s.scan_status, 
+                    s.scan_date, s.xai_status, s.xai_path, s.storage_path, s.user_id
+                FROM scan_results s
+                WHERE (
+                    s.doctor_id = $1::uuid
+                    OR EXISTS (
+                        SELECT 1 FROM care_relationships cr
+                        WHERE cr.doctor_id = $1::uuid
+                          AND cr.patient_id = s.user_id
+                          AND cr.status = 'active'
+                          AND (cr.expires_at IS NULL OR cr.expires_at > now())
+                    )
+                )
+            """
+
+            count_query = f"SELECT COUNT(*) FROM ({query}) AS sub"
+            total_count = await conn.fetchval(count_query, uuid.UUID(caller_id))
+
+            data_query = query + " ORDER BY s.scan_status DESC, s.scan_date DESC LIMIT $2 OFFSET $3"
+            rows = await conn.fetch(data_query, uuid.UUID(caller_id), limit, offset)
+
+            items = []
+            for row in rows:
+                row_xai_status = row["xai_status"] or "none"
+                patient_uuid_str = str(row["user_id"])
+                patient_ref = f"PT-{patient_uuid_str[:6].upper()}"
+
+                items.append(
+                    HistoryScanItem(
+                        scan_id=str(row["scan_id"]),
+                        modality=row["modality"],
+                        ai_diagnosis=row["ai_diagnosis"] or "",
+                        confidence=float(row["confidence"]) if row["confidence"] is not None else None,
+                        scan_status=row["scan_status"],
+                        scan_date=row["scan_date"],
+                        xai_status=row_xai_status,
+                        has_image=row["storage_path"] is not None,
+                        explainability=ExplainabilityInfo(
+                            status=row_xai_status,
+                            url=build_xai_authenticated_url(row["xai_path"]),
+                            modality=row["modality"],
+                        ),
+                        patient_ref=patient_ref
+                    )
+                )
+
+            return HistoryResponse(total_count=total_count, items=items)

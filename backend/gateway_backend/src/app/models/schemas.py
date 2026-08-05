@@ -202,12 +202,27 @@ class HistoryScanItem(BaseModel):
     xai_status: str
     has_image: bool = Field(..., description="True if storage_path IS NOT NULL")
     explainability: ExplainabilityInfo
+    patient_ref: Optional[str] = Field(None, description="Masked patient identifier used in triage.")
 
 
 class HistoryResponse(BaseModel):
     """Paginated scan history response."""
     total_count: int
     items: List[HistoryScanItem]
+
+
+class ClaimRequest(BaseModel):
+    """Request payload for claiming a clinical report via QR code."""
+    token: str = Field(..., description="The JWT token parsed from the QR code.")
+
+
+class ClaimResponse(BaseModel):
+    """Response payload for a report claim."""
+    report_url: str = Field(..., description="Signed URL to access the PDF report.")
+    access_granted: bool = Field(..., description="Whether ongoing access was granted to the caller.")
+    patient_ref: Optional[str] = Field(None, description="Masked patient identifier (e.g. PT-1A2B3C).")
+    access_expires_at: Optional[datetime] = Field(None, description="When the granted access expires.")
+    reason: Optional[str] = Field(None, description="Reason if access was not granted.")
 
 
 class TrendTransition(BaseModel):

@@ -357,3 +357,291 @@ def test_history_bare_xai_status_still_present(auth_headers, app_state_override)
     item = resp.json()["items"][0]
     assert "xai_status" in item
     assert item["xai_status"] == "generated"
+
+
+# --- claim and triage tests ---
+
+from jose import jwt
+from datetime import timedelta
+from app.core.config import gateway_config
+
+@pytest.fixture
+def valid_claim_token():
+    payload = {
+        "sub": str(uuid.uuid4()),
+        "scan_ids": [str(uuid.uuid4())],
+        "exp": datetime.utcnow() + timedelta(hours=1),
+        "purpose": "report_claim"
+    }
+    return jwt.encode(payload, gateway_config.report_token_secret, algorithm="HS256"), payload["sub"]
+
+def test_claim_valid_token_no_prior_relationship(auth_headers, app_state_override, valid_claim_token):
+    token, patient_id = valid_claim_token
+    # mock doctor exists, no prior relationship
+    def fetchval_side_effect(query, *args):
+        if "doctor_profiles" in query:
+            return True
+        return None
+    def fetchrow_side_effect(query, *args):
+        return None
+    
+    pool = MagicMock()
+    conn = AsyncMock()
+    conn.fetchval.side_effect = fetchval_side_effect
+    conn.fetchrow.side_effect = fetchrow_side_effect
+    pool.acquire.return_value = MockAcquireContextManager(conn)
+    app.state.db_pool = pool
+    app.state.supabase_client = MagicMock()
+    app.state.supabase_client.storage.from_().create_signed_url = AsyncMock(return_value={"signedURL": "http://fake"})
+
+    resp = client.post("/api/v1/scans/claim", json={"token": token}, headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["access_granted"] is True
+    assert data["patient_ref"].startswith("PT-")
+    assert "user_id" not in data
+    assert "name" not in data
+    # assert insert was called
+    insert_call = next((call for call in conn.execute.call_args_list if "INSERT INTO care_relationships" in call.args[0]), None)
+    assert insert_call is not None
+
+def test_claim_valid_token_active_relationship(auth_headers, app_state_override, valid_claim_token):
+    token, patient_id = valid_claim_token
+    def fetchval_side_effect(query, *args):
+        if "doctor_profiles" in query:
+            return True
+        return None
+    def fetchrow_side_effect(query, *args):
+        return {"status": "active", "ended_at": None}
+    
+    pool = MagicMock()
+    conn = AsyncMock()
+    conn.fetchval.side_effect = fetchval_side_effect
+    conn.fetchrow.side_effect = fetchrow_side_effect
+    pool.acquire.return_value = MockAcquireContextManager(conn)
+    app.state.db_pool = pool
+    app.state.supabase_client = MagicMock()
+    app.state.supabase_client.storage.from_().create_signed_url = AsyncMock(return_value={"signedURL": "http://fake"})
+
+    resp = client.post("/api/v1/scans/claim", json={"token": token}, headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["access_granted"] is True
+    update_call = next((call for call in conn.execute.call_args_list if "UPDATE care_relationships SET expires_at" in call.args[0]), None)
+    assert update_call is not None
+    insert_call = next((call for call in conn.execute.call_args_list if "INSERT INTO care_relationships" in call.args[0]), None)
+    assert insert_call is None
+
+def test_claim_valid_token_revoked_relationship(auth_headers, app_state_override, valid_claim_token):
+    token, patient_id = valid_claim_token
+    def fetchval_side_effect(query, *args):
+        if "doctor_profiles" in query:
+            return True
+        return None
+    def fetchrow_side_effect(query, *args):
+        return {"status": "revoked", "ended_at": None}
+    
+    pool = MagicMock()
+    conn = AsyncMock()
+    conn.fetchval.side_effect = fetchval_side_effect
+    conn.fetchrow.side_effect = fetchrow_side_effect
+    pool.acquire.return_value = MockAcquireContextManager(conn)
+    app.state.db_pool = pool
+    app.state.supabase_client = MagicMock()
+    app.state.supabase_client.storage.from_().create_signed_url = AsyncMock(return_value={"signedURL": "http://fake"})
+
+    resp = client.post("/api/v1/scans/claim", json={"token": token}, headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["access_granted"] is False
+    assert data["reason"] == "revoked"
+
+def test_claim_valid_token_ended_at_set(auth_headers, app_state_override, valid_claim_token):
+    token, patient_id = valid_claim_token
+    def fetchval_side_effect(query, *args):
+        if "doctor_profiles" in query:
+            return True
+        return None
+    def fetchrow_side_effect(query, *args):
+        return {"status": "active", "ended_at": datetime.now(timezone.utc)}
+    
+    pool = MagicMock()
+    conn = AsyncMock()
+    conn.fetchval.side_effect = fetchval_side_effect
+    conn.fetchrow.side_effect = fetchrow_side_effect
+    pool.acquire.return_value = MockAcquireContextManager(conn)
+    app.state.db_pool = pool
+    app.state.supabase_client = MagicMock()
+    app.state.supabase_client.storage.from_().create_signed_url = AsyncMock(return_value={"signedURL": "http://fake"})
+
+    resp = client.post("/api/v1/scans/claim", json={"token": token}, headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["access_granted"] is False
+    assert data["reason"] == "revoked"
+
+def test_claim_caller_is_patient(auth_headers, app_state_override, valid_claim_token):
+    token, patient_id = valid_claim_token
+    app.dependency_overrides[get_current_user] = lambda: patient_id
+    
+    pool = MagicMock()
+    conn = AsyncMock()
+    pool.acquire.return_value = MockAcquireContextManager(conn)
+    app.state.db_pool = pool
+    app.state.supabase_client = MagicMock()
+    app.state.supabase_client.storage.from_().create_signed_url = AsyncMock(return_value={"signedURL": "http://fake"})
+
+    resp = client.post("/api/v1/scans/claim", json={"token": token}, headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["access_granted"] is False
+    assert conn.execute.call_count == 0
+    assert conn.fetchrow.call_count == 0
+    app.dependency_overrides[get_current_user] = lambda: FAKE_USER_ID
+
+def test_claim_caller_not_a_doctor(auth_headers, app_state_override, valid_claim_token):
+    token, patient_id = valid_claim_token
+    def fetchval_side_effect(query, *args):
+        if "doctor_profiles" in query:
+            return False
+        return None
+    
+    pool = MagicMock()
+    conn = AsyncMock()
+    conn.fetchval.side_effect = fetchval_side_effect
+    pool.acquire.return_value = MockAcquireContextManager(conn)
+    app.state.db_pool = pool
+    app.state.supabase_client = MagicMock()
+    app.state.supabase_client.storage.from_().create_signed_url = AsyncMock(return_value={"signedURL": "http://fake"})
+
+    resp = client.post("/api/v1/scans/claim", json={"token": token}, headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["access_granted"] is False
+    assert conn.execute.call_count == 0
+
+def test_claim_expired_token(auth_headers, app_state_override):
+    app.state.db_pool = MagicMock()
+    payload = {
+        "sub": str(uuid.uuid4()),
+        "scan_ids": [str(uuid.uuid4())],
+        "exp": datetime.utcnow() - timedelta(hours=1),
+        "purpose": "report_claim"
+    }
+    token = jwt.encode(payload, gateway_config.report_token_secret, algorithm="HS256")
+    resp = client.post("/api/v1/scans/claim", json={"token": token}, headers=auth_headers)
+    assert resp.status_code == 403
+    assert "expired" in resp.json()["detail"].lower()
+
+def test_claim_wrong_secret(auth_headers, app_state_override):
+    app.state.db_pool = MagicMock()
+    payload = {
+        "sub": str(uuid.uuid4()),
+        "scan_ids": [str(uuid.uuid4())],
+        "exp": datetime.utcnow() + timedelta(hours=1),
+        "purpose": "report_claim"
+    }
+    token = jwt.encode(payload, "wrong_secret", algorithm="HS256")
+    resp = client.post("/api/v1/scans/claim", json={"token": token}, headers=auth_headers)
+    assert resp.status_code == 403
+    assert "signature" in resp.json()["detail"].lower()
+
+def test_claim_wrong_purpose(auth_headers, app_state_override):
+    app.state.db_pool = MagicMock()
+    payload = {
+        "sub": str(uuid.uuid4()),
+        "scan_ids": [str(uuid.uuid4())],
+        "exp": datetime.utcnow() + timedelta(hours=1),
+        "purpose": "other_purpose"
+    }
+    token = jwt.encode(payload, gateway_config.report_token_secret, algorithm="HS256")
+    resp = client.post("/api/v1/scans/claim", json={"token": token}, headers=auth_headers)
+    assert resp.status_code == 403
+    assert "purpose" in resp.json()["detail"].lower()
+
+
+def test_triage_returns_scans(auth_headers, app_state_override):
+    patient_id = str(uuid.uuid4())
+    row = {
+        "scan_id": str(uuid.uuid4()),
+        "modality": "cxr",
+        "ai_diagnosis": "Pneumonia",
+        "confidence": 0.9,
+        "scan_status": 2, # High Risk
+        "scan_date": datetime.now(timezone.utc),
+        "xai_status": "none",
+        "xai_path": None,
+        "storage_path": "path",
+        "user_id": uuid.UUID(patient_id)
+    }
+    def fetchval_side_effect(query, *args):
+        if "doctor_profiles" in query:
+            return True
+        if "COUNT" in query:
+            return 1
+        return None
+    def fetch_side_effect(query, *args):
+        if "ORDER BY" in query:
+            return [row]
+        return []
+
+    pool = MagicMock()
+    conn = AsyncMock()
+    conn.fetchval.side_effect = fetchval_side_effect
+    conn.fetch.side_effect = fetch_side_effect
+    pool.acquire.return_value = MockAcquireContextManager(conn)
+    app.state.db_pool = pool
+
+    resp = client.get("/api/v1/scans/triage", headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["items"]) == 1
+    item = data["items"][0]
+    assert item["patient_ref"] == f"PT-{patient_id[:6].upper()}"
+    assert "user_id" not in item
+    assert item["scan_status"] == 2
+
+def test_triage_not_a_doctor(auth_headers, app_state_override):
+    def fetchval_side_effect(query, *args):
+        if "doctor_profiles" in query:
+            return False
+        return None
+
+    pool = MagicMock()
+    conn = AsyncMock()
+    conn.fetchval.side_effect = fetchval_side_effect
+    pool.acquire.return_value = MockAcquireContextManager(conn)
+    app.state.db_pool = pool
+
+    resp = client.get("/api/v1/scans/triage", headers=auth_headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["items"] == []
+
+def test_triage_query_contains_predicates(auth_headers, app_state_override):
+    def fetchval_side_effect(query, *args):
+        if "doctor_profiles" in query:
+            return True
+        if "COUNT" in query:
+            return 0
+        return None
+
+    pool = MagicMock()
+    conn = AsyncMock()
+    conn.fetchval.side_effect = fetchval_side_effect
+    conn.fetch.return_value = []
+    pool.acquire.return_value = MockAcquireContextManager(conn)
+    app.state.db_pool = pool
+
+    resp = client.get("/api/v1/scans/triage", headers=auth_headers)
+    assert resp.status_code == 200
+    
+    # Assert query contains the exact conditions required by the constraint
+    queries = [call.args[0] for call in conn.fetch.call_args_list]
+    assert len(queries) > 0
+    q = queries[0]
+    assert "s.doctor_id = $1::uuid" in q
+    assert "cr.status = 'active'" in q
+    assert "(cr.expires_at IS NULL OR cr.expires_at > now())" in q
+    assert "ORDER BY s.scan_status DESC, s.scan_date DESC" in q
+    assert "cr.status = 'pending'" not in q
