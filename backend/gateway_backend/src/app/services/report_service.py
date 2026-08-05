@@ -247,6 +247,21 @@ class ReportGenerator:
 
         def add_footer(canvas, doc):
             canvas.saveState()
+            
+            # Watermark
+            # Note: In SimpleDocTemplate, the page handler is called *after* 
+            # the flowables are drawn, meaning this is drawn *over* the 
+            # content. The high transparency (0.15 alpha) ensures it does 
+            # not obscure diagnostic images or text.
+            canvas.saveState()
+            canvas.setFillColorRGB(0.5, 0.5, 0.5)
+            canvas.setFillAlpha(0.15)
+            canvas.setFont('Helvetica-Bold', 80)
+            canvas.translate(A4[0] / 2, A4[1] / 2)
+            canvas.rotate(45)
+            canvas.drawCentredString(0, 0, "MediScanX")
+            canvas.restoreState()
+
             canvas.setFont('Helvetica', 9)
             footer_text = f"Page {doc.page} | This document was produced by an AI diagnostic aid."
             canvas.drawString(inch, 0.75 * inch, footer_text)

@@ -308,3 +308,36 @@ def test_pdf_story_omits_ai_summary_when_none(mock_paragraph):
     called_texts = [call.args[0] for call in mock_paragraph.call_args_list]
     assert "AI-Generated Clinical Summary" not in called_texts
     assert "This summary is AI-generated and may be incomplete or inaccurate. It is not a diagnosis. Discuss these results with a qualified clinician." not in called_texts
+
+
+@patch("app.services.report_service.SimpleDocTemplate")
+def test_pdf_story_contains_watermark(mock_doc_class):
+    mock_doc = MagicMock()
+    mock_doc.page = 1
+    mock_doc_class.return_value = mock_doc
+    
+    # When build is called, we want to extract the onFirstPage handler and call it with a mock canvas
+    def capture_build(*args, **kwargs):
+        handler = kwargs.get("onFirstPage")
+        if handler:
+            mock_canvas = MagicMock()
+            handler(mock_canvas, mock_doc)
+            
+            # Verify watermark was drawn
+            mock_canvas.drawCentredString.assert_any_call(0, 0, "MediScanX")
+            # Verify transparency was set
+            mock_canvas.setFillAlpha.assert_called_with(0.15)
+            # Verify rotation
+            mock_canvas.rotate.assert_called_with(45)
+
+    mock_doc.build.side_effect = capture_build
+
+    gen = ReportGenerator()
+    gen._build_pdf_story("patient-123", [], {}, {})
+    assert mock_doc.build.called
+
+
+def test_pdf_bytes_start_with_pdf():
+    gen = ReportGenerator()
+    pdf_bytes = gen._build_pdf_story("patient-123", [], {}, {})
+    assert pdf_bytes.startswith(b"%PDF")
