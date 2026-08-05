@@ -181,7 +181,11 @@ class ECGDiagnosticEngine:
         for class_idx in top_indices:
             score: float = float(base_probs[class_idx])
             label: str = self.cfg.ecg_labels[class_idx]
-            threshold: float = thresholds[int(class_idx)]
+            threshold: float = (
+                thresholds[int(class_idx)]
+                if int(class_idx) < len(thresholds)
+                else self.cfg.classification_threshold
+            )
 
             overlay_b64: Optional[str] = None
             if use_gradcam and self.xai_engine is not None:
