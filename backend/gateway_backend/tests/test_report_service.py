@@ -46,7 +46,12 @@ async def test_generate_report_own_scans_succeeds(auth_headers):
         }
     ]
     
-    with patch("asyncpg.connect", return_value=mock_conn):
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.content = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\xdacd\xf8\xcfP\x0f\x00\x03\x86\x01\x80Z4}k\x00\x00\x00\x00IEND\xaeB`\x82'
+
+    with patch("asyncpg.connect", return_value=mock_conn), \
+         patch("httpx.AsyncClient.get", new_callable=AsyncMock, return_value=mock_response):
         response = client.post(
             "/api/v1/reports/generate",
             json={

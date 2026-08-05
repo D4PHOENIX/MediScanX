@@ -203,7 +203,10 @@ async def skin_predict(
         # Step 3: Derive severity from confidence
         top_findings = ml_result.get("top_findings", [])
         confidence: float = float(top_findings[0].get("confidence", 0.0)) if top_findings else 0.0
-        scan_status: int = ScanPersistenceService.derive_scan_status(confidence)
+        ai_diagnosis: str = str(ml_result.get("predicted_class", ""))
+        scan_status: int = ScanPersistenceService.derive_scan_status(
+            confidence, ai_diagnosis=ai_diagnosis, modality="skin"
+        )
 
         # Step 4: Persist to scan_results
         try:
@@ -215,7 +218,7 @@ async def skin_predict(
                 scan_type=_SCAN_TYPE_SKIN,
                 scan_status=scan_status,
                 image_url=image_url,
-                ai_diagnosis=str(ml_result.get("predicted_class", "")),
+                ai_diagnosis=ai_diagnosis,
                 confidence=confidence,
                 findings=str(ml_result.get("findings", "")),
                 metadata=ml_result,
