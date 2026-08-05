@@ -63,6 +63,7 @@ jobs:
             SUPABASE_PUBLISHABLE_KEY: "mock-anon-key"
             SUPABASE_SECRET_KEY: "mock-service-role-key"
             REPORT_TOKEN_SECRET: "mock-report-token-secret"
+            ANDROID_CERT_FINGERPRINTS: "mock-fingerprint"
 
             # Internal microservice URLs (unreachable in CI — all proxied calls are
             # mocked via httpx patch in the test suite)
@@ -135,6 +136,7 @@ jobs:
                   SUPABASE_SECRET_KEY: "mock-service-role-key"
                   REPORT_TOKEN_SECRET: "mock-report-token-secret"
                   ALLOWED_ORIGINS: "https://test-origin.example.com"
+                  ANDROID_CERT_FINGERPRINTS: "mock-fingerprint"
                   CXR_SERVICE_URL: "http://cxr-mock"
                   ECG_SERVICE_URL: "http://ecg-mock"
                   SKIN_SERVICE_URL: "http://skin-mock"
@@ -204,6 +206,7 @@ jobs:
                     -e SUPABASE_PUBLISHABLE_KEY=mock-anon-key \
                     -e SUPABASE_SECRET_KEY=mock-service-role-key \
                     -e REPORT_TOKEN_SECRET=mock-report-token-secret \
+                    -e ANDROID_CERT_FINGERPRINTS=mock-fingerprint \
                     -e CXR_SERVICE_URL=http://cxr-mock \
                     -e ECG_SERVICE_URL=http://ecg-mock \
                     -e SKIN_SERVICE_URL=http://skin-mock \

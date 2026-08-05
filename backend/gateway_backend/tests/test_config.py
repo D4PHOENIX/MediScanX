@@ -18,6 +18,7 @@ def test_database_url_pooler_accepted():
         ecg_service_url="http://test",
         skin_service_url="http://test",
         agent_service_url="http://test",
+        android_cert_fingerprints="test-fingerprint",
         database_url="postgresql://user:pass@aws-0-eu-central-1.pooler.supabase.com:5432/postgres"
     )
     assert config.database_url == "postgresql://user:pass@aws-0-eu-central-1.pooler.supabase.com:5432/postgres"
@@ -38,6 +39,7 @@ def test_database_url_pooler_rejected_bare_host():
             ecg_service_url="http://test",
             skin_service_url="http://test",
             agent_service_url="http://test",
+            android_cert_fingerprints="test-fingerprint",
             database_url="postgresql://user:pass@db.xyz.supabase.co:5432/postgres"
         )
     assert "DATABASE_URL host must use the .pooler.supabase.com endpoint" in str(exc.value)
@@ -58,6 +60,7 @@ def test_database_url_pooler_rejected_wrong_port():
             ecg_service_url="http://test",
             skin_service_url="http://test",
             agent_service_url="http://test",
+            android_cert_fingerprints="test-fingerprint",
             database_url="postgresql://user:pass@aws-0-eu-central-1.pooler.supabase.com:5433/postgres"
         )
     assert "DATABASE_URL must use the Supabase SESSION pooler (port 5432)" in str(exc.value)
@@ -76,6 +79,7 @@ def test_claim_base_url_from_env(monkeypatch):
         cxr_service_url="http://test",
         ecg_service_url="http://test",
         skin_service_url="http://test",
-        agent_service_url="http://test"
+        agent_service_url="http://test",
+        android_cert_fingerprints="test-fingerprint"
     )
     assert config.claim_base_url == "https://custom.app/claim"

@@ -12,6 +12,7 @@ from typing import AsyncIterator
 import asyncpg
 import httpx
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse, HTMLResponse
 from supabase import create_async_client
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -149,6 +150,49 @@ def create_app() -> FastAPI:
     application.include_router(report_router, prefix=api_prefix)
     application.include_router(sync_router, prefix=api_prefix)
     application.include_router(scans_router, prefix=f"{api_prefix}/scans")
+
+    # Domain root routes for Android App Links and QR fallback
+    @application.get("/.well-known/assetlinks.json", response_class=JSONResponse, tags=["App Links"])
+    async def assetlinks():
+        fingerprints = [fp.strip() for fp in gateway_config.android_cert_fingerprints.split(",") if fp.strip()]
+        return [
+            {
+                "relation": ["delegate_permission/common.handle_all_urls"],
+                "target": {
+                    "namespace": "android_app",
+                    "package_name": gateway_config.android_package_name,
+                    "sha256_cert_fingerprints": fingerprints
+                }
+            }
+        ]
+
+    @application.get("/claim", response_class=HTMLResponse, tags=["App Links"])
+    async def claim_fallback():
+        # Note: the token query param is intentionally ignored to prevent reflection
+        return """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>MediScanX Clinical Report</title>
+            <style>
+                body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; padding: 20px; text-align: center; background-color: #f9f9f9; }
+                .card { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); max-width: 400px; }
+                h1 { color: #333; font-size: 24px; margin-top: 0; }
+                p { color: #666; line-height: 1.5; }
+            </style>
+        </head>
+        <body>
+            <div class="card">
+                <h1>MediScanX Report</h1>
+                <p>This is a MediScanX clinical report link.</p>
+                <p>The MediScanX app is required to open it.</p>
+                <p>Please install the app and scan the QR code again.</p>
+            </div>
+        </body>
+        </html>
+        """
 
     return application
 
