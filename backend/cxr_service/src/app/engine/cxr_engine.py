@@ -135,7 +135,7 @@ class CXREngine:
         )
         return thresholds
 
-    async def predict(self, image_path: str, top_k: int = 5) -> Dict[str, Any]:
+    async def predict(self, image_path: str, top_k: int = 5, use_gradcam: bool = True) -> Dict[str, Any]:
         """Run a full diagnostic pass asynchronously on a given image.
 
         Args:
@@ -152,4 +152,4 @@ class CXREngine:
             raise RuntimeError(
                 "CXREngine is not initialised – call await engine.initialize() first"
             )
-        return await self._diagnostic_engine.async_run_diagnostic(image_path, top_k)
+        return await self._diagnostic_engine.async_run_diagnostic(image_path, top_k, use_gradcam)

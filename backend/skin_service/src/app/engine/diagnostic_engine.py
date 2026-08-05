@@ -60,7 +60,7 @@ class SkinDiagnosticEngine:
         _, buffer = cv2.imencode('.png', cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
         return base64.b64encode(buffer).decode('utf-8')
 
-    def run_diagnostic(self, image_path: str, top_k: int = 3) -> Dict[str, Any]:
+    def run_diagnostic(self, image_path: str, top_k: int = 3, use_gradcam: bool = True) -> Dict[str, Any]:
         """Execute a complete diagnostic pass on a skin lesion image (synchronous).
 
         Args:
@@ -73,13 +73,13 @@ class SkinDiagnosticEngine:
         Raises:
             ModelInferenceError: If the underlying model forward pass fails.
         """
-        # 1. Preprocessing 
+        # 1. Preprocessing ---------------------------------------------------
         input_tensor: torch.Tensor
         visual_base_rgb: np.ndarray
         input_tensor, visual_base_rgb = self.preprocessor.process(image_path)
         input_tensor = input_tensor.to(self.cfg.device)
 
-        # 2. Forward pass for probabilities (no grad needed here) 
+        # 2. Forward pass for probabilities (no grad needed here) ------------
         # Ensure the outer tensor is grad-free before computing probabilities.
         with torch.no_grad():
             try:
@@ -93,28 +93,42 @@ class SkinDiagnosticEngine:
 
         top_indices: np.ndarray = np.argsort(probs_np)[::-1][:top_k]   # descending
 
-        # 3. Build findings (with Grad‑CAM overlays) 
+        # 3. Build findings (with Grad‑CAM overlays) -------------------------
         # Use SkinGradCAM as a context manager to ensure hooks are cleanly registered and removed.
         top_findings: List[Dict[str, Any]] = []
-        with self.xai_engine as gradcam:
+        if use_gradcam:
+            with self.xai_engine as gradcam:
+                for class_idx in top_indices:
+                    label: str = self.cfg.skin_labels[class_idx]
+                    abbrev: str = self.cfg.skin_abbreviations[class_idx]
+                    score: float = float(probs_np[class_idx])
+
+                    heatmap: np.ndarray = gradcam.generate_heatmap(
+                        input_tensor, int(class_idx)
+                    )
+                    overlay: np.ndarray = gradcam.blend_overlay(visual_base_rgb, heatmap)
+                    overlay_b64: str = self._encode_image(overlay)
+
+                    top_findings.append(
+                        {
+                            "label": label,
+                            "abbreviation": abbrev,
+                            "class_idx": int(class_idx),
+                            "confidence": round(score, 4),
+                            "overlay_img": overlay_b64,
+                        }
+                    )
+        else:
             for class_idx in top_indices:
                 label: str = self.cfg.skin_labels[class_idx]
                 abbrev: str = self.cfg.skin_abbreviations[class_idx]
                 score: float = float(probs_np[class_idx])
-
-                heatmap: np.ndarray = gradcam.generate_heatmap(
-                    input_tensor, int(class_idx)
-                )
-                overlay: np.ndarray = gradcam.blend_overlay(visual_base_rgb, heatmap)
-                overlay_b64: str = self._encode_image(overlay)
-
                 top_findings.append(
                     {
                         "label": label,
                         "abbreviation": abbrev,
                         "class_idx": int(class_idx),
                         "confidence": round(score, 4),
-                        "overlay_img": overlay_b64,
                     }
                 )
 
@@ -128,7 +142,7 @@ class SkinDiagnosticEngine:
         }
 
     async def async_run_diagnostic(
-        self, image_path: str, top_k: int = 3
+        self, image_path: str, top_k: int = 3, use_gradcam: bool = True
     ) -> Dict[str, Any]:
         """Execute the diagnostic pass asynchronously by offloading CPU work to a thread.
 
@@ -142,4 +156,4 @@ class SkinDiagnosticEngine:
         Returns:
             Dict[str, Any]: A dictionary containing the original image, findings, predicted class, and patient ID.
         """
-        return await asyncio.to_thread(self.run_diagnostic, image_path, top_k)
+        return await asyncio.to_thread(self.run_diagnostic, image_path, top_k, use_gradcam)

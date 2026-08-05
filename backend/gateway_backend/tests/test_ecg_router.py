@@ -28,7 +28,7 @@ async def test_ecg_predict_valid_input(auth_headers):
         response = client.post(
                 "/api/v1/ecg/predict", 
             files={"file": ("ecg.csv", b"fake_ecg_data", "text/csv")},
-            data={"top_k": 3},
+            data={"top_k": 1},
                 headers=auth_headers,
                 
 
@@ -49,7 +49,7 @@ async def test_ecg_predict_valid_input(auth_headers):
     assert url == f"{gateway_config.ecg_service_url}/predict"
     assert "file" in call_args.kwargs["files"]
     assert call_args.kwargs["files"]["file"][1] == b"fake_ecg_data"
-    assert call_args.kwargs["data"]["top_k"] == '3' or call_args.kwargs["data"]["top_k"] == 3
+    assert call_args.kwargs["data"]["top_k"] == '1' or call_args.kwargs["data"]["top_k"] == 1
 
 
 @pytest.mark.asyncio
@@ -58,7 +58,7 @@ async def test_ecg_predict_missing_file(auth_headers):
     try:
         response = client.post(
             "/api/v1/ecg/predict",
-            data={"top_k": 3},
+            data={"top_k": 1},
                 headers=auth_headers,
                 
 
@@ -105,7 +105,7 @@ async def test_ecg_predict_upstream_error(auth_headers):
         response = client.post(
                 "/api/v1/ecg/predict", 
             files={"file": ("ecg.csv", b"fake", "text/csv")},
-            data={"top_k": 3},
+            data={"top_k": 1},
                 headers=auth_headers,
                 
 
@@ -143,7 +143,7 @@ async def test_ecg_predict_422_forwarding(auth_headers):
         response = client.post(
             "/api/v1/ecg/predict", 
             files={"file": ("ecg.csv", b"fake", "text/csv")},
-            data={"top_k": 3},
+            data={"top_k": 1},
             headers=auth_headers,
         )
     finally:
@@ -188,3 +188,36 @@ async def test_ecg_persists_expected_modality(auth_headers) -> None:
             assert kwargs["scan_type"] == 0
             assert kwargs.get("xai_status", "none") == "none"
             assert kwargs.get("xai_path") is None
+
+@pytest.mark.asyncio
+async def test_ecg_xai_false(auth_headers) -> None:
+    from unittest.mock import patch
+    
+    mock_client = AsyncMock()
+    mock_response = MagicMock(spec=Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "predicted_class": "Normal",
+        "confidence": 0.95
+    }
+    mock_client.post.return_value = mock_response
+    app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
+    
+    with patch("app.api.ecg_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.ecg_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage:
+        
+        mock_storage.return_value = ("url_main", "user123/scan456.png")
+        
+        response = client.post("/api/v1/ecg/predict", headers=auth_headers,
+            files={"file": ("ecg.bin", b"data", "application/octet-stream")},
+            data={"top_k": 1, "xai": "false"},
+        )
+        
+        assert mock_client.post.call_args.kwargs["params"] == {"xai": "false"}
+        assert response.status_code == 200
+        
+        kwargs = mock_insert.call_args.kwargs
+        assert kwargs["xai_status"] == "none"
+        assert response.json()["explainability"]["status"] == "none"

@@ -68,7 +68,7 @@ class CXRDiagnosticEngine:
         _, buffer = cv2.imencode(".png", cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
         return base64.b64encode(buffer).decode("utf-8")
 
-    def run_diagnostic(self, image_path: str, top_k: int = 5) -> Dict[str, Any]:
+    def run_diagnostic(self, image_path: str, top_k: int = 5, use_gradcam: bool = True) -> Dict[str, Any]:
         """Execute a complete diagnostic pass on a chest X-ray image (synchronous).
 
         Args:
@@ -111,8 +111,13 @@ class CXRDiagnosticEngine:
             # probabilities are read from detached logits outside the graph.
             logits: torch.Tensor
             spatial_features: torch.Tensor
-            logits, spatial_features = self.model(input_tensor)
-            full_probs: np.ndarray = torch.sigmoid(logits.detach()).squeeze().cpu().numpy()
+            if use_gradcam:
+                logits, spatial_features = self.model(input_tensor)
+                full_probs: np.ndarray = torch.sigmoid(logits.detach()).squeeze().cpu().numpy()
+            else:
+                with torch.no_grad():
+                    logits, spatial_features = self.model(input_tensor)
+                    full_probs: np.ndarray = torch.sigmoid(logits).squeeze().cpu().numpy()
         except Exception as exc:
             raise ModelInferenceError(
                 message="DenseNet-121 forward pass failed.",
@@ -132,18 +137,19 @@ class CXRDiagnosticEngine:
                 score: float = float(base_probs[class_idx])
                 label: str = self.cfg.chexpert_labels[class_idx]
 
-                heatmap: np.ndarray = self.xai_engine.generate_heatmap(logits, spatial_features, int(class_idx))
-                overlay: np.ndarray = self.xai_engine.blend_overlay(visual_base_rgb, heatmap)
-                overlay_b64: str = self._encode_image(overlay)
+                finding = {
+                    "label": label,
+                    "class_idx": int(class_idx),
+                    "confidence": round(score, 4),
+                }
 
-                top_findings.append(
-                    {
-                        "label": label,
-                        "class_idx": int(class_idx),
-                        "confidence": round(score, 4),
-                        "overlay_img": overlay_b64,
-                    }
-                )
+                if use_gradcam:
+                    heatmap: np.ndarray = self.xai_engine.generate_heatmap(logits, spatial_features, int(class_idx))
+                    overlay: np.ndarray = self.xai_engine.blend_overlay(visual_base_rgb, heatmap)
+                    overlay_b64: str = self._encode_image(overlay)
+                    finding["overlay_img"] = overlay_b64
+
+                top_findings.append(finding)
         except RuntimeError as exc:
             raise ModelInferenceError(
                 message="Grad-CAM++ heatmap generation failed.",
@@ -169,7 +175,7 @@ class CXRDiagnosticEngine:
             "predicted_diagnoses": predicted_labels,
         }
 
-    async def async_run_diagnostic(self, image_path: str, top_k: int = 5) -> Dict[str, Any]:
+    async def async_run_diagnostic(self, image_path: str, top_k: int = 5, use_gradcam: bool = True) -> Dict[str, Any]:
         """Execute the diagnostic pass asynchronously by offloading CPU work to a thread.
 
         PyTorch inference and Grad-CAM++ backward passes are CPU-bound operations
@@ -182,4 +188,4 @@ class CXRDiagnosticEngine:
         Returns:
             Dict[str, Any]: A dictionary containing the original image, findings, predicted diagnoses, and patient ID.
         """
-        return await asyncio.to_thread(self.run_diagnostic, image_path, top_k)
+        return await asyncio.to_thread(self.run_diagnostic, image_path, top_k, use_gradcam)
