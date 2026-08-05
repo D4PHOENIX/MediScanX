@@ -29,6 +29,7 @@ async def test_generate_report_own_scans_succeeds(auth_headers):
     mock_bucket = AsyncMock()
     mock_supabase_client.storage.from_.return_value = mock_bucket
     mock_bucket.create_signed_url.return_value = {"signedURL": "https://signed.mock/report.pdf"}
+    mock_bucket.download.return_value = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\xdacd\xf8\xcfP\x0f\x00\x03\x86\x01\x80Z4}k\x00\x00\x00\x00IEND\xaeB`\x82'
     app.state.supabase_client = mock_supabase_client
 
     # Mock asyncpg
@@ -42,7 +43,8 @@ async def test_generate_report_own_scans_succeeds(auth_headers):
             "confidence": 0.95,
             "scan_date": datetime.datetime.now(datetime.timezone.utc),
             "xai_status": "generated",
-            "xai_path": "path/to/xai"
+            "xai_path": "path/to/xai",
+            "storage_path": None
         }
     ]
     
@@ -156,7 +158,7 @@ def test_pdf_story_contains_xai_status_text(mock_paragraph):
         "timestamp": "2026-07-22T00:00:00Z",
         "xai_status": "none"
     }]
-    gen._build_pdf_story(patient_id, scan_metadata_none, {})
+    gen._build_pdf_story(patient_id, scan_metadata_none, {}, {})
     
     # Check that Paragraph was called with the correct text
     called_texts = [call.args[0] for call in mock_paragraph.call_args_list]
@@ -176,7 +178,7 @@ def test_pdf_story_contains_xai_status_text(mock_paragraph):
         "xai_path": "path/to/xai"
     }]
     # With missing bytes (simulating failure to load)
-    gen._build_pdf_story(patient_id, scan_metadata_gen, {})
+    gen._build_pdf_story(patient_id, scan_metadata_gen, {}, {})
     called_texts = [call.args[0] for call in mock_paragraph.call_args_list]
     assert any("Heatmap available but failed to load" in text for text in called_texts)
 
@@ -196,7 +198,8 @@ async def test_generate_report_partial_scans_rejected(auth_headers):
             "confidence": 0.95,
             "scan_date": datetime.datetime.now(datetime.timezone.utc),
             "xai_status": "none",
-            "xai_path": None
+            "xai_path": None,
+            "storage_path": None
         }
     ]
     
@@ -279,7 +282,7 @@ def test_pdf_story_contains_ai_summary(mock_paragraph):
         "xai_status": "none"
     }]
     
-    gen._build_pdf_story(patient_id, scan_metadata, {}, ai_summary="Test AI summary text")
+    gen._build_pdf_story(patient_id, scan_metadata, {}, {}, ai_summary="Test AI summary text")
     
     called_texts = [call.args[0] for call in mock_paragraph.call_args_list]
     assert "AI-Generated Clinical Summary" in called_texts
@@ -300,8 +303,41 @@ def test_pdf_story_omits_ai_summary_when_none(mock_paragraph):
         "xai_status": "none"
     }]
     
-    gen._build_pdf_story(patient_id, scan_metadata, {}, ai_summary=None)
+    gen._build_pdf_story(patient_id, scan_metadata, {}, {}, ai_summary=None)
     
     called_texts = [call.args[0] for call in mock_paragraph.call_args_list]
     assert "AI-Generated Clinical Summary" not in called_texts
     assert "This summary is AI-generated and may be incomplete or inaccurate. It is not a diagnosis. Discuss these results with a qualified clinician." not in called_texts
+
+
+@patch("app.services.report_service.SimpleDocTemplate")
+def test_pdf_story_contains_watermark(mock_doc_class):
+    mock_doc = MagicMock()
+    mock_doc.page = 1
+    mock_doc_class.return_value = mock_doc
+    
+    # When build is called, we want to extract the onFirstPage handler and call it with a mock canvas
+    def capture_build(*args, **kwargs):
+        handler = kwargs.get("onFirstPage")
+        if handler:
+            mock_canvas = MagicMock()
+            handler(mock_canvas, mock_doc)
+            
+            # Verify watermark was drawn
+            mock_canvas.drawCentredString.assert_any_call(0, 0, "MediScanX")
+            # Verify transparency was set
+            mock_canvas.setFillAlpha.assert_called_with(0.15)
+            # Verify rotation
+            mock_canvas.rotate.assert_called_with(45)
+
+    mock_doc.build.side_effect = capture_build
+
+    gen = ReportGenerator()
+    gen._build_pdf_story("patient-123", [], {}, {})
+    assert mock_doc.build.called
+
+
+def test_pdf_bytes_start_with_pdf():
+    gen = ReportGenerator()
+    pdf_bytes = gen._build_pdf_story("patient-123", [], {}, {})
+    assert pdf_bytes.startswith(b"%PDF")
