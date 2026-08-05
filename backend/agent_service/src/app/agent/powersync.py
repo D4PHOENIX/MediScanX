@@ -33,7 +33,7 @@ async def setup_powersync_schema(pool: Pool) -> None:
     logger.info("PowerSync chat_messages schema verified.")
 
 
-async def _execute_with_retry(pool: Pool, query: str, records: list, max_retries: int = 3) -> None:
+async def _execute_with_retry(pool: Pool, query: str, records: List[Any], max_retries: int = 3) -> None:
     """Execute a batch insert with exponential backoff on transient failures."""
     for attempt in range(max_retries):
         try:

@@ -99,7 +99,7 @@ TOOLS: List[BaseTool] = [
 ]
 
 
-def _extract_citations_from_messages(messages: list) -> list[Dict[str, Any]]:
+def _extract_citations_from_messages(messages: List[Any]) -> List[Dict[str, Any]]:
     """Scan tool-result messages for RAG citation metadata.
 
     Parses ToolMessage content produced by the ``search_clinical_guidelines``
@@ -291,8 +291,24 @@ async def build_graph(
         # Wrap the compiled graph to inject the db_pool into every run's configurable
         original_astream_events = compiled.astream_events
 
-        async def _astream_events_with_pool(input_data, *, version="v2", config=None, **kwargs):
-            """Proxy for the compiled graph's astream_events that injects the database pool."""
+        async def _astream_events_with_pool(
+            input_data: Any,
+            *,
+            version: str = "v2",
+            config: Optional[RunnableConfig] = None,
+            **kwargs: Any,
+        ) -> AsyncGenerator[Any, None]:
+            """Proxy for the compiled graph's astream_events that injects the database pool.
+            
+            Args:
+                input_data (Any): The input payload for the graph execution.
+                version (str, optional): The stream events API version. Defaults to "v2".
+                config (Optional[RunnableConfig], optional): Runtime configuration provided by LangGraph. Defaults to None.
+                **kwargs (Any): Additional keyword arguments.
+                
+            Yields:
+                Any: The streamed events from the graph execution.
+            """
             config = config or {}
             configurable = config.get("configurable", {})
             configurable["db_pool"] = pool
