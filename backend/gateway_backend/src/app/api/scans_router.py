@@ -8,9 +8,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from app.core.security import get_current_user
 from app.models.domain import ScanModality
-from app.models.schemas import ExplainabilityInfo, HistoryResponse, HistoryScanItem, TrendResponse, TrendTransition
-from app.utils.labels import _ABNORMAL_LABELS, _NORMAL_LABELS
-from app.utils.xai_utils import build_xai_authenticated_url
+from app.models.schemas import ExplainabilityInfo, HistoryResponse, HistoryScanItem, TrendResponse, TrendTransition  # noqa: F401
+from app.utils.labels import _ABNORMAL_LABELS, _NORMAL_LABELS  # noqa: F401
+from app.utils.xai_utils import build_xai_authenticated_url  # noqa: F401
+from app.services.scans_service import ScansService
 
 router: APIRouter = APIRouter(prefix="", tags=["scans"])
 
@@ -38,7 +39,26 @@ async def get_history(
     limit: int = Query(20, ge=1, le=100, description="Max scans to return"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
     user_id: str = Depends(get_current_user),
-):
+) -> HistoryResponse:
+    """Retrieves the paginated scan history for the authenticated caller.
+
+    Fetches a chronologically ordered list of previous scans and their respective
+    diagnoses, confidences, and explainability statuses. Filters can be applied
+    to restrict the history to a specific diagnostic modality.
+
+    Args:
+        request (Request): The incoming FastAPI request context containing the database pool.
+        modality (Optional[str], optional): The specific diagnostic modality to filter by (e.g., 'cxr', 'skin'). Defaults to None.
+        limit (int, optional): The maximum number of scan records to return. Defaults to 20.
+        offset (int, optional): The pagination offset. Defaults to 0.
+        user_id (str): The authenticated universal identifier of the calling user.
+
+    Returns:
+        HistoryResponse: A structured response containing the total count of matching scans and the paginated list of scan items.
+
+    Raises:
+        HTTPException: Raises 422 if an invalid modality is provided, or 503 if the database is unavailable.
+    """
     if modality and modality not in [m.value for m in ScanModality]:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -53,35 +73,8 @@ async def get_history(
         )
 
     user_uuid = uuid.UUID(user_id)
-
-    count_query = """
-        SELECT COUNT(*)
-        FROM scan_results
-        WHERE user_id = $1 AND modality IS NOT NULL
-    """
-    count_args = [user_uuid]
-    if modality:
-        count_query += " AND modality = $2"
-        count_args.append(modality)
-
-    data_query = """
-        SELECT scan_id, modality, ai_diagnosis, confidence, scan_status, scan_date, xai_status, xai_path, storage_path
-        FROM scan_results
-        WHERE user_id = $1 AND modality IS NOT NULL
-    """
-    data_args = [user_uuid]
-    if modality:
-        data_query += " AND modality = $2"
-        data_args.append(modality)
-
-    # Append pagination and ordering
-    data_query += f" ORDER BY scan_date DESC NULLS LAST LIMIT ${len(data_args) + 1} OFFSET ${len(data_args) + 2}"
-    data_args.extend([limit, offset])
-
     try:
-        async with db_pool.acquire() as conn:
-            total_count = await conn.fetchval(count_query, *count_args)
-            rows = await conn.fetch(data_query, *data_args)
+        return await ScansService.get_history(db_pool, user_uuid, modality, limit, offset)
     except asyncpg.PostgresError as e:
         import logging
 
@@ -89,29 +82,6 @@ async def get_history(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database query failed"
         ) from e
-
-    items = []
-    for row in rows:
-        row_xai_status = row["xai_status"] or "none"
-        items.append(
-            HistoryScanItem(
-                scan_id=str(row["scan_id"]),
-                modality=row["modality"],
-                ai_diagnosis=row["ai_diagnosis"] or "",
-                confidence=float(row["confidence"]) if row["confidence"] is not None else None,
-                scan_status=row["scan_status"],
-                scan_date=row["scan_date"],
-                xai_status=row_xai_status,
-                has_image=row["storage_path"] is not None,
-                explainability=ExplainabilityInfo(
-                    status=row_xai_status,
-                    url=build_xai_authenticated_url(row["xai_path"]),
-                    modality=row["modality"],
-                ),
-            )
-        )
-
-    return HistoryResponse(total_count=total_count, items=items)
 
 
 @router.get(
@@ -125,7 +95,25 @@ async def get_trends(
     modality: str = Query(..., description="Modality filter is required for trends"),
     limit: int = Query(50, ge=1, le=200, description="Max scans to return"),
     user_id: str = Depends(get_current_user),
-):
+) -> TrendResponse:
+    """Calculates the diagnosis progression over time for the authenticated caller.
+
+    Analyzes a chronological sequence of scans for a specific modality to determine
+    clinical transitions (e.g., worsening, improving, unchanged, changed, indeterminate)
+    between consecutive scans.
+
+    Args:
+        request (Request): The incoming FastAPI request context containing the database pool.
+        modality (str): The specific diagnostic modality to calculate trends for.
+        limit (int, optional): The maximum number of scan records to analyze. Defaults to 50.
+        user_id (str): The authenticated universal identifier of the calling user.
+
+    Returns:
+        TrendResponse: A structured response containing the sequence of analyzed scans and the computed transitions between them.
+
+    Raises:
+        HTTPException: Raises 422 if an invalid modality is provided, or 503 if the database is unavailable.
+    """
     if modality not in [m.value for m in ScanModality]:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -140,23 +128,8 @@ async def get_trends(
         )
 
     user_uuid = uuid.UUID(user_id)
-
-    query = """
-        SELECT scan_id, modality, ai_diagnosis, confidence, scan_status, scan_date, xai_status, xai_path, storage_path
-        FROM (
-            SELECT scan_id, modality, ai_diagnosis, confidence, scan_status, scan_date, xai_status, xai_path, storage_path
-            FROM scan_results
-            WHERE user_id = $1 AND modality = $2 AND modality IS NOT NULL
-            ORDER BY scan_date DESC NULLS LAST
-            LIMIT $3
-        ) sub
-        ORDER BY scan_date ASC NULLS LAST
-    """
-    args = [user_uuid, modality, limit]
-
     try:
-        async with db_pool.acquire() as conn:
-            rows = await conn.fetch(query, *args)
+        return await ScansService.get_trends(db_pool, user_uuid, modality, limit)
     except asyncpg.PostgresError as e:
         import logging
 
@@ -164,67 +137,3 @@ async def get_trends(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database query failed"
         ) from e
-
-    scans = []
-    for row in rows:
-        row_xai_status = row["xai_status"] or "none"
-        scans.append(
-            HistoryScanItem(
-                scan_id=str(row["scan_id"]),
-                modality=row["modality"],
-                ai_diagnosis=row["ai_diagnosis"] or "",
-                confidence=float(row["confidence"]) if row["confidence"] is not None else None,
-                scan_status=row["scan_status"],
-                scan_date=row["scan_date"],
-                xai_status=row_xai_status,
-                has_image=row["storage_path"] is not None,
-                explainability=ExplainabilityInfo(
-                    status=row_xai_status,
-                    url=build_xai_authenticated_url(row["xai_path"]),
-                    modality=row["modality"],
-                ),
-            )
-        )
-
-    transitions = []
-    # Compute transitions between consecutive pairs
-    for i in range(1, len(scans)):
-        prev_scan = scans[i - 1]
-        curr_scan = scans[i]
-
-        days_between = None
-        if curr_scan.scan_date and prev_scan.scan_date:
-            days_between = (curr_scan.scan_date.date() - prev_scan.scan_date.date()).days
-
-        confidence_delta = None
-        if curr_scan.confidence is not None and prev_scan.confidence is not None:
-            confidence_delta = round(curr_scan.confidence - prev_scan.confidence, 4)
-
-        prev_status = get_status(prev_scan.ai_diagnosis, modality)
-        curr_status = get_status(curr_scan.ai_diagnosis, modality)
-
-        if prev_status == "unknown" or curr_status == "unknown":
-            direction = "indeterminate"
-        elif prev_status == "normal" and curr_status == "abnormal":
-            direction = "worsening"
-        elif prev_status == "abnormal" and curr_status == "normal":
-            direction = "improving"
-        elif prev_status == "abnormal" and curr_status == "abnormal":
-            if prev_scan.ai_diagnosis == curr_scan.ai_diagnosis:
-                direction = "unchanged"
-            else:
-                direction = "changed"
-        else:  # normal -> normal
-            direction = "unchanged"
-
-        transitions.append(
-            TrendTransition(
-                from_diagnosis=prev_scan.ai_diagnosis,
-                to_diagnosis=curr_scan.ai_diagnosis,
-                days_between=days_between,
-                confidence_delta=confidence_delta,
-                direction=direction,
-            )
-        )
-
-    return TrendResponse(scans=scans, transitions=transitions)

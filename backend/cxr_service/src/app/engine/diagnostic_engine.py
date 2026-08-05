@@ -12,7 +12,7 @@ import torch
 from app.core.config import Settings as CXRInferenceConfig
 from app.engine.preprocessor import CXRInferencePreprocessor
 from app.core.exceptions import InvalidTensorShapeError, ModelInferenceError
-from app.explainability.gradcam import GradCAMPlusPlus
+from app.engine.rendering import encode_image, generate_gradcam, overlay_heatmap
 
 
 class CXRDiagnosticEngine:
@@ -26,7 +26,6 @@ class CXRDiagnosticEngine:
         cfg (CXRInferenceConfig): Configuration settings for inference.
         model (torch.nn.Module): The PyTorch neural network model.
         preprocessor (CXRInferencePreprocessor): Image preprocessor.
-        xai_engine (GradCAMPlusPlus): Grad-CAM++ visualization engine.
         thresholds (Optional[np.ndarray]): Per-class decision thresholds.
     """
 
@@ -35,7 +34,6 @@ class CXRDiagnosticEngine:
         cfg: CXRInferenceConfig,
         model: torch.nn.Module,
         preprocessor: CXRInferencePreprocessor,
-        xai_engine: GradCAMPlusPlus,
         thresholds: Optional[np.ndarray] = None,
     ) -> None:
         """Initializes the CXRDiagnosticEngine.
@@ -44,29 +42,13 @@ class CXRDiagnosticEngine:
             cfg (CXRInferenceConfig): The configuration settings.
             model (torch.nn.Module): The underlying PyTorch model.
             preprocessor (CXRInferencePreprocessor): The preprocessor for input images.
-            xai_engine (GradCAMPlusPlus): The Grad-CAM++ explainability engine.
             thresholds (Optional[np.ndarray], optional): Per-class thresholds. Defaults to None.
         """
         self.cfg: CXRInferenceConfig = cfg
         self.model: torch.nn.Module = model
         self.preprocessor: CXRInferencePreprocessor = preprocessor
-        self.xai_engine: GradCAMPlusPlus = xai_engine
         self.thresholds: Optional[np.ndarray] = thresholds
 
-    @staticmethod
-    def _encode_image(img: np.ndarray) -> str:
-        """Convert a numpy image (RGB uint8) to a base64‑encoded PNG string.
-
-        Args:
-            img (np.ndarray): The input image array in RGB format.
-
-        Returns:
-            str: The base64-encoded PNG string representation of the image.
-        """
-        _: bool
-        buffer: np.ndarray
-        _, buffer = cv2.imencode(".png", cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-        return base64.b64encode(buffer).decode("utf-8")
 
     def run_diagnostic(self, image_path: str, top_k: int = 5, use_gradcam: bool = True) -> Dict[str, Any]:
         """Execute a complete diagnostic pass on a chest X-ray image (synchronous).
@@ -144,9 +126,11 @@ class CXRDiagnosticEngine:
                 }
 
                 if use_gradcam:
-                    heatmap: np.ndarray = self.xai_engine.generate_heatmap(logits, spatial_features, int(class_idx))
-                    overlay: np.ndarray = self.xai_engine.blend_overlay(visual_base_rgb, heatmap)
-                    overlay_b64: str = self._encode_image(overlay)
+                    heatmap: np.ndarray = generate_gradcam(logits, spatial_features, int(class_idx))
+                    overlay: np.ndarray = overlay_heatmap(
+                        visual_base_rgb, heatmap, self.cfg.colormap, self.cfg.heatmap_beta
+                    )
+                    overlay_b64: str = encode_image(overlay)
                     finding["overlay_img"] = overlay_b64
 
                 top_findings.append(finding)
@@ -169,7 +153,7 @@ class CXRDiagnosticEngine:
         ]
 
         return {
-            "original_img": self._encode_image(visual_base_rgb),
+            "original_img": encode_image(visual_base_rgb),
             "top_findings": top_findings,
             "patient_id": Path(image_path).name,
             "predicted_diagnoses": predicted_labels,

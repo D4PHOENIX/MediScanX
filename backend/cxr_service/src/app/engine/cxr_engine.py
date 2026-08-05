@@ -13,7 +13,6 @@ from app.core.config import Settings as CXRInferenceConfig
 from app.engine.diagnostic_engine import CXRDiagnosticEngine
 from app.engine.preprocessor import CXRInferencePreprocessor
 from app.core.exceptions import CXRModelNotFoundError, ModelInferenceError
-from app.explainability.gradcam import GradCAMPlusPlus
 from app.models.densenet121_cihmlc import DenseNet121_CIHMLC
 
 logger = logging.getLogger(__name__)
@@ -82,9 +81,8 @@ class CXREngine:
         self.cfg.classification_thresholds = thresholds
 
         preprocessor: CXRInferencePreprocessor = CXRInferencePreprocessor(self.cfg)
-        xai_engine: GradCAMPlusPlus = GradCAMPlusPlus(self.cfg)
         self._diagnostic_engine = CXRDiagnosticEngine(
-            self.cfg, self._model, preprocessor, xai_engine, thresholds=thresholds
+            self.cfg, self._model, preprocessor, thresholds=thresholds
         )
 
     def _load_thresholds(self) -> np.ndarray:

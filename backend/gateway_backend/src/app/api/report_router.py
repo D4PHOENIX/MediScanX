@@ -22,10 +22,6 @@ from app.services.report_service import ReportGenerator
 router: APIRouter = APIRouter(prefix="/reports", tags=["reports"], dependencies=[Depends(get_current_user)])
 
 
-
-
-
-
 @router.post("/generate")
 async def generate_report(payload: GenerateReportRequest, request: Request, current_user: str = Depends(get_current_user)) -> Dict[str, str]:
     """Creates a comprehensive clinical PDF report and stages it in cloud storage.
@@ -49,41 +45,11 @@ async def generate_report(payload: GenerateReportRequest, request: Request, curr
     if not dsn:
         raise HTTPException(status_code=500, detail="DATABASE_URL not set")
 
-    conn: asyncpg.Connection = await asyncpg.connect(dsn)
-    try:
-        rows: List[asyncpg.Record] = await conn.fetch(
-            """
-            SELECT scan_id, modality, ai_diagnosis, confidence, scan_date,
-                   xai_status, xai_path
-            FROM scan_results
-            WHERE scan_id = ANY($1::uuid[])
-              AND (user_id = $2::uuid OR EXISTS (
-                  SELECT 1 FROM care_relationships 
-                  WHERE doctor_id = $2::uuid 
-                    AND patient_id = scan_results.user_id 
-                    AND status = 'active'
-                    AND (expires_at IS NULL OR expires_at > now())
-              ))
-            """,
-            payload.selected_scan_ids,
-            current_user
-        )
-    finally:
-        await conn.close()
-
-    scan_metadata: List[Dict[str, Any]] = []
-    for row in rows:
-        scan_metadata.append(
-            {
-                "id": str(row["scan_id"]),
-                "modality": row["modality"],
-                "ai_diagnosis": row["ai_diagnosis"],
-                "confidence": float(row["confidence"]) if row["confidence"] is not None else None,
-                "timestamp": row["scan_date"].isoformat() if row["scan_date"] else "N/A",
-                "xai_status": row["xai_status"],
-                "xai_path": row["xai_path"],
-            }
-        )
+    scan_metadata = await ReportGenerator.fetch_scan_metadata(
+        dsn=dsn,
+        selected_scan_ids=payload.selected_scan_ids,
+        current_user=current_user
+    )
 
     if not scan_metadata:
         raise HTTPException(status_code=403, detail="No matching scans found or access denied")
