@@ -84,20 +84,21 @@ class ECGEngine:
 
         # 2. PyTorch model (fallback & Grad-CAM) -------------------------------
         ckpt_path: Path = Path(self.cfg.pytorch_ckpt_path)
-        if ckpt_path.exists():
-            try:
-                self._model = ECGClassifier.from_checkpoint(
-                    str(ckpt_path),
-                    device=self.cfg.device,
-                    num_leads=self.cfg.num_leads,
-                    num_classes=self.cfg.num_classes,
-                )
-            except RuntimeError as e:
-                if "out of memory" in str(e).lower():
-                    raise ECGInferenceError("GPU memory exhaustion during PyTorch model loading.") from e
-                raise
-        else:
-            self._model = None
+        if not ckpt_path.exists():
+            from app.core.exceptions import ECGModelNotFoundError
+            raise ECGModelNotFoundError(path=str(ckpt_path))
+
+        try:
+            self._model = ECGClassifier.from_checkpoint(
+                str(ckpt_path),
+                device=self.cfg.device,
+                num_leads=self.cfg.num_leads,
+                num_classes=self.cfg.num_classes,
+            )
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower():
+                raise ECGInferenceError("GPU memory exhaustion during PyTorch model loading.") from e
+            raise
 
         # 3. Preprocessor ------------------------------------------------------
         self._preprocessor = ECGPreprocessor(self.cfg)

@@ -60,16 +60,12 @@ async def test_baseline_harness():
     from app.engine.diagnostic_engine import ECGDiagnosticEngine
     from app.models.cnn_bilstm import ECGClassifier
 
-    try:
-        model = ECGClassifier.from_checkpoint(
-            cfg.pytorch_ckpt_path,
-            device=cfg.device,
-            num_leads=cfg.num_leads,
-            num_classes=cfg.num_classes,
-        )
-    except Exception as e:
-        print(f"Failed to load real model: {e}")
-        return
+    model = ECGClassifier.from_checkpoint(
+        cfg.pytorch_ckpt_path,
+        device=cfg.device,
+        num_leads=cfg.num_leads,
+        num_classes=cfg.num_classes,
+    )
 
     diagnostic_engine = ECGDiagnosticEngine(
         cfg=cfg,

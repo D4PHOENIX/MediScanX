@@ -78,7 +78,7 @@ services:
             - "127.0.0.1:8002:8002"
         environment:
             - ECG_ONNX_PATH=${ECG_ONNX_PATH:-/models/mediscanx_ecg_3rdexp_finetuned.onnx}
-            - ECG_CKPT_PATH=${ECG_CKPT_PATH:-/models/mediscanx_ecg_3rdexp_finetuned.ckpt}
+            - ECG_CKPT_PATH=${ECG_CKPT_PATH:-/models/mediscanx_ecg_3rdexp_weights_only.ckpt}
         volumes:
             - ./ecg_service/weights:/models
             - ecg_diagnostics_vol:/app/data/ecg_diagnostics
