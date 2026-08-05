@@ -101,7 +101,6 @@ async def predict(
                 input_type='image',
                 use_gradcam=xai,
                 diagnostic_mode=True,
-                diagnostic_out_dir="/app/data/ecg_diagnostics",
             )
         finally:
             try:

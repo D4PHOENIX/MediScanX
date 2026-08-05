@@ -126,7 +126,6 @@ class ECGEngine:
         use_gradcam: bool = False,
         top_k: int = 5,
         diagnostic_mode: bool = False,
-        diagnostic_out_dir: str = "/app/data/ecg_diagnostics",
     ) -> Dict[str, Any]:
         """Process an ECG input and return diagnostic findings.
 
@@ -136,6 +135,9 @@ class ECGEngine:
             input_type (str): ``'wfdb'`` or ``'image'``. Defaults to ``'wfdb'``.
             use_gradcam (bool): If ``True``, the PyTorch backend is used instead of
                 ONNX and Grad‑CAM overlays are generated. Defaults to False.
+            diagnostic_mode (bool): If ``True``, write debug images and signals to
+                ``cfg.ecg_diagnostic_dir``. The directory is set via
+                ``Settings.ecg_diagnostic_dir``; there is no per-call path override.
 
         Returns:
             Dict[str, Any]: A JSON‑serialisable dict containing predictions and metadata.
@@ -154,6 +156,5 @@ class ECGEngine:
             use_gradcam=use_gradcam,
             top_k=top_k,
             diagnostic_mode=diagnostic_mode,
-            diagnostic_out_dir=diagnostic_out_dir,
         )
         return result
