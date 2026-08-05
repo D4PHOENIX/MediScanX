@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional, Tuple, Type
+from typing import Any, List, Optional, Tuple, Type
 
 import numpy as np
 import torch
@@ -173,10 +173,10 @@ class GradCAM1D:
         """Generate a 1‑D saliency heatmap for a single target class.
 
         The heatmap is normalised to ``[0, 1]`` and interpolated to
-        ``cfg.seq_length`` (typically 500).
+        ``cfg.seq_length`` (250 samples — 2.5 s @ 100 Hz).
 
         Args:
-            input_tensor (torch.Tensor): Pre‑processed signal tensor ``(1, 12, 500)``
+            input_tensor (torch.Tensor): Pre-processed signal tensor ``(1, 12, 250)``
                 (should already be on the correct device).
             target_class_idx (int): Index of the pathology class of interest.
 

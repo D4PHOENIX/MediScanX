@@ -172,12 +172,16 @@ class ECGDiagnosticEngine:
         base_probs: np.ndarray = full_probs[:num_labels]
         top_indices: np.ndarray = np.argsort(base_probs)[::-1][:top_k]
 
+        # Per-class calibrated thresholds (Notebook 04b, Fold 9)
+        thresholds: List[float] = list(self.cfg.ecg_thresholds)
+
         # ---- 3. Build findings -----------------------------------------------
         top_findings: List[Dict[str, Any]] = []
         class_idx: np.intp
         for class_idx in top_indices:
             score: float = float(base_probs[class_idx])
             label: str = self.cfg.ecg_labels[class_idx]
+            threshold: float = thresholds[int(class_idx)]
 
             overlay_b64: Optional[str] = None
             if use_gradcam and self.xai_engine is not None:
@@ -197,6 +201,8 @@ class ECGDiagnosticEngine:
                 "label": label,
                 "class_idx": int(class_idx),
                 "confidence": score,
+                "above_threshold": score >= threshold,
+                "threshold": threshold,
                 "overlay_img": overlay_b64,
             })
 
