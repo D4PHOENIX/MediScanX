@@ -58,6 +58,11 @@ class Settings(BaseSettings):
         default="/models/mediscanx_ecg_3rdexp_finetuned.ckpt",
         description="Path to the PyTorch Lightning checkpoint file.",
     )
+    pytorch_ckpt_path: str = Field(
+        default="/models/mediscanx_ecg_3rdexp_finetuned.ckpt",
+        alias="ECG_CKPT_PATH",
+        description="Alias for ecg_ckpt_path to support legacy test assertions.",
+    )
 
     # Hardware
     device: str = "cpu"
