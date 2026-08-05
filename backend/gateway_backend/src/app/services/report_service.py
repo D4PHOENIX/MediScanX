@@ -42,6 +42,61 @@ class ReportGenerator:
     QR codes for seamless report access.
     """
 
+    @staticmethod
+    async def fetch_scan_metadata(dsn: str, selected_scan_ids: List[str], current_user: str) -> List[Dict[str, Any]]:
+        """Retrieve diagnostic scan metadata securely scoped to a patient or authorized doctor.
+        
+        Fetches the modality, predicted diagnoses, confidences, and explainability 
+        paths for a specific set of scan IDs. Enforces access control by ensuring 
+        the requesting user either owns the scans (patient) or has an active care 
+        relationship with the patient (doctor).
+        
+        Args:
+            dsn (str): Database connection string.
+            selected_scan_ids (List[str]): UUIDs of the specific scans to include in the report.
+            current_user (str): UUID of the authenticated user requesting the metadata.
+            
+        Returns:
+            List[Dict[str, Any]]: A list of dictionaries containing the authorized scan metadata.
+        """
+        import asyncpg
+        conn: asyncpg.Connection = await asyncpg.connect(dsn)
+        try:
+            rows: List[asyncpg.Record] = await conn.fetch(
+                """
+                SELECT scan_id, modality, ai_diagnosis, confidence, scan_date,
+                       xai_status, xai_path
+                FROM scan_results
+                WHERE scan_id = ANY($1::uuid[])
+                  AND (user_id = $2::uuid OR EXISTS (
+                      SELECT 1 FROM care_relationships 
+                      WHERE doctor_id = $2::uuid 
+                        AND patient_id = scan_results.user_id 
+                        AND status = 'active'
+                        AND (expires_at IS NULL OR expires_at > now())
+                  ))
+                """,
+                selected_scan_ids,
+                current_user
+            )
+        finally:
+            await conn.close()
+
+        scan_metadata: List[Dict[str, Any]] = []
+        for row in rows:
+            scan_metadata.append(
+                {
+                    "id": str(row["scan_id"]),
+                    "modality": row["modality"],
+                    "ai_diagnosis": row["ai_diagnosis"],
+                    "confidence": float(row["confidence"]) if row["confidence"] is not None else None,
+                    "timestamp": row["scan_date"].isoformat() if row["scan_date"] else "N/A",
+                    "xai_status": row["xai_status"],
+                    "xai_path": row["xai_path"],
+                }
+            )
+        return scan_metadata
+
     def _build_pdf_story(
         self,
         patient_id: str,
@@ -184,7 +239,7 @@ class ReportGenerator:
                         try:
                             resp = await http_client.get(
                                 xai_url,
-                                headers={"Authorization": f"Bearer {gateway_config.supabase_service_role_key}"},
+                                headers={"Authorization": f"Bearer {gateway_config.supabase_secret_key}"},
                                 timeout=10.0
                             )
                             if resp.status_code == 200:
