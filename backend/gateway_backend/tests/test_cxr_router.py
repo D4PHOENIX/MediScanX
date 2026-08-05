@@ -23,6 +23,8 @@ async def test_cxr_stream_proxying(auth_headers) -> None:
     mock_client.post.return_value = mock_response
     
     app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
     app.state.db_pool = None
     try:
         response = client.post("/api/v1/cxr/predict", headers=auth_headers,
@@ -46,6 +48,8 @@ async def test_cxr_persists_expected_modality(auth_headers) -> None:
     app.state.http_client = mock_client
     app.state.db_pool = MagicMock()
     app.state.supabase_client = MagicMock()
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
     
     with patch("app.api.cxr_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
          patch("app.api.cxr_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage:
@@ -56,7 +60,7 @@ async def test_cxr_persists_expected_modality(auth_headers) -> None:
         )
         assert response.status_code == 200
         assert mock_insert.called
-        kwargs = mock_insert.call_args.kwargs
+        kwargs = mock_insert.call_args[1]
         assert kwargs["modality"] == "cxr"
         assert kwargs["scan_type"] == 1
 
@@ -95,6 +99,8 @@ async def test_upstream_service_error_envelope(auth_headers) -> None:
     )
     
     app.state.http_client = mock_client    
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
     try:
         response = client.post("/api/v1/cxr/predict", headers=auth_headers,
             files={"file": ("xray.jpg", b"fake", "image/jpeg")},
@@ -146,6 +152,8 @@ async def test_cxr_overlay_objects_land_in_expected_path(auth_headers, fake_ml_d
     app.state.http_client = mock_client
     app.state.db_pool = MagicMock()
     app.state.supabase_client = MagicMock()
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
     
     with patch("app.api.cxr_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
          patch("app.api.cxr_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage, \
@@ -162,7 +170,7 @@ async def test_cxr_overlay_objects_land_in_expected_path(auth_headers, fake_ml_d
         )
         
         overlay_call_kwargs = mock_storage.call_args_list[0].kwargs
-        kwargs = mock_insert.call_args.kwargs
+        kwargs = mock_insert.call_args[1]
         expected_user_id = kwargs["user_id"]
         expected_scan_id = kwargs["scan_id"]
         assert overlay_call_kwargs["object_path"] == f"{expected_user_id}/{expected_scan_id}/overlay_0.png"
@@ -181,6 +189,8 @@ async def test_cxr_compensating_delete_on_persistence_failure(auth_headers, fake
     mock_response.json.return_value = fake_ml_data
     mock_client.post.return_value = mock_response
     app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
     app.state.db_pool = MagicMock()
     app.state.supabase_client = MagicMock()
     
@@ -218,6 +228,8 @@ async def test_cxr_compensating_delete_failure_propagates_original_exception(aut
     app.state.http_client = mock_client
     app.state.db_pool = MagicMock()
     app.state.supabase_client = MagicMock()
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
     
     with patch("app.api.cxr_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
          patch("app.api.cxr_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_upload, \
@@ -252,6 +264,8 @@ async def test_cxr_metadata_contains_no_large_base64_strings(auth_headers, fake_
     app.state.http_client = mock_client
     app.state.db_pool = MagicMock()
     app.state.supabase_client = MagicMock()
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
     
     with patch("app.api.cxr_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
          patch("app.api.cxr_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage:
@@ -261,7 +275,7 @@ async def test_cxr_metadata_contains_no_large_base64_strings(auth_headers, fake_
             files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 1},
         )
         
-        metadata = mock_insert.call_args.kwargs["metadata"]
+        metadata = mock_insert.call_args[1]["metadata"]
         metadata_str = json.dumps(metadata)
         assert len(metadata_str) < 4096
 
@@ -277,6 +291,8 @@ async def test_cxr_top_findings_retains_metadata_after_swap(auth_headers, fake_m
     app.state.http_client = mock_client
     app.state.db_pool = MagicMock()
     app.state.supabase_client = MagicMock()
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
     
     with patch("app.api.cxr_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
          patch("app.api.cxr_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage:
@@ -286,7 +302,7 @@ async def test_cxr_top_findings_retains_metadata_after_swap(auth_headers, fake_m
             files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 1},
         )
         
-        metadata = mock_insert.call_args.kwargs["metadata"]
+        metadata = mock_insert.call_args[1]["metadata"]
         assert metadata["top_findings"][0]["label"] == "Infiltrate"
         assert metadata["top_findings"][0]["confidence"] == 0.90
         assert metadata["top_findings"][0]["class_idx"] == 4
@@ -305,6 +321,8 @@ async def test_cxr_original_img_is_absent_from_metadata(auth_headers, fake_ml_da
     app.state.http_client = mock_client
     app.state.db_pool = MagicMock()
     app.state.supabase_client = MagicMock()
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
     
     with patch("app.api.cxr_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
          patch("app.api.cxr_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage:
@@ -314,7 +332,7 @@ async def test_cxr_original_img_is_absent_from_metadata(auth_headers, fake_ml_da
             files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 1},
         )
         
-        metadata = mock_insert.call_args.kwargs["metadata"]
+        metadata = mock_insert.call_args[1]["metadata"]
         assert "original_img" not in metadata
 
 @pytest.mark.asyncio
@@ -327,6 +345,8 @@ async def test_cxr_overlay_upload_failure(auth_headers, fake_ml_data) -> None:
     mock_response.json.return_value = fake_ml_data
     mock_client.post.return_value = mock_response
     app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
     app.state.db_pool = MagicMock()
     app.state.supabase_client = MagicMock()
     
@@ -346,7 +366,7 @@ async def test_cxr_overlay_upload_failure(auth_headers, fake_ml_data) -> None:
         )
         
         assert response.status_code == 200
-        kwargs = mock_insert.call_args.kwargs
+        kwargs = mock_insert.call_args[1]
         metadata = kwargs["metadata"]
         assert metadata["top_findings"][0]["label"] == "Infiltrate"
         # metadata.xai key was removed in Task 1 — xai_status is the sole source of truth.
@@ -369,6 +389,8 @@ async def test_cxr_no_overlays(auth_headers) -> None:
     app.state.http_client = mock_client
     app.state.db_pool = MagicMock()
     app.state.supabase_client = MagicMock()
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
     
     with patch("app.api.cxr_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
          patch("app.api.cxr_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage:
@@ -381,7 +403,7 @@ async def test_cxr_no_overlays(auth_headers) -> None:
         )
         
         assert response.status_code == 200
-        kwargs = mock_insert.call_args.kwargs
+        kwargs = mock_insert.call_args[1]
         assert kwargs["xai_status"] == "none"
         assert kwargs.get("xai_path") is None
         # metadata.xai key was removed in Task 1 — xai_status is the sole source of truth.
@@ -396,6 +418,8 @@ async def test_cxr_ai_diagnosis_from_top_findings_invariant(auth_headers) -> Non
     mock_response.status_code = 200
     mock_client.post.return_value = mock_response
     app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
     app.state.db_pool = MagicMock()
     app.state.supabase_client = MagicMock()
     
@@ -416,7 +440,7 @@ async def test_cxr_ai_diagnosis_from_top_findings_invariant(auth_headers) -> Non
         client.post("/api/v1/cxr/predict", headers=auth_headers,
             files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 1})
         
-        kwargs = mock_insert.call_args.kwargs
+        kwargs = mock_insert.call_args[1]
         # Assert ai_diagnosis matches the higher-confidence label
         assert kwargs["ai_diagnosis"] == "Pleural Other"
         assert kwargs["confidence"] == 0.811
@@ -434,7 +458,7 @@ async def test_cxr_ai_diagnosis_from_top_findings_invariant(auth_headers) -> Non
         client.post("/api/v1/cxr/predict", headers=auth_headers,
             files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 1})
         
-        kwargs = mock_insert.call_args.kwargs
+        kwargs = mock_insert.call_args[1]
         assert kwargs["ai_diagnosis"] == "Normal"
         assert kwargs["confidence"] == 0.5552
         
@@ -449,7 +473,7 @@ async def test_cxr_ai_diagnosis_from_top_findings_invariant(auth_headers) -> Non
         client.post("/api/v1/cxr/predict", headers=auth_headers,
             files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 1})
         
-        kwargs = mock_insert.call_args.kwargs
+        kwargs = mock_insert.call_args[1]
         # Assert fallback is None and 0.0
         assert kwargs["ai_diagnosis"] is None
         assert kwargs["confidence"] == 0.0
@@ -468,7 +492,7 @@ async def test_cxr_ai_diagnosis_from_top_findings_invariant(auth_headers) -> Non
         client.post("/api/v1/cxr/predict", headers=auth_headers,
             files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 1})
         
-        kwargs = mock_insert.call_args.kwargs
+        kwargs = mock_insert.call_args[1]
         assert kwargs["ai_diagnosis"] == "Edema"
         assert kwargs["confidence"] == 0.999
 
@@ -488,6 +512,8 @@ async def test_cxr_xai_false(auth_headers) -> None:
     app.state.http_client = mock_client
     app.state.db_pool = MagicMock()
     app.state.supabase_client = MagicMock()
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
     
     with patch("app.api.cxr_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
          patch("app.api.cxr_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage:
@@ -505,7 +531,7 @@ async def test_cxr_xai_false(auth_headers) -> None:
         # mock_storage should be called ONCE (for the main image), not for overlay
         assert mock_storage.call_count == 1
         
-        kwargs = mock_insert.call_args.kwargs
+        kwargs = mock_insert.call_args[1]
         assert kwargs["xai_status"] == "none"
         assert kwargs.get("xai_path") is None
         assert response.json()["explainability"]["status"] == "none"

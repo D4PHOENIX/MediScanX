@@ -550,6 +550,6 @@ async def test_ecg_xai_status_and_path_together(auth_headers, fake_ecg_ml_data) 
 
 response.status_code == 200
         
-        kwargs = mock_insert.call_args.kwargs
+        kwargs = mock_insert.call_args[1]
         assert kwargs["xai_status"] == "none"
         assert response.json()["explainability"]["status"] == "none"

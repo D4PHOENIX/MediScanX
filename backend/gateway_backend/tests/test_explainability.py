@@ -51,7 +51,7 @@ async def test_cxr_persisted_metadata_absent_xai_key(auth_headers) -> None:
             files={"file": ("xray.jpg", b"data", "image/jpeg")},
         )
 
-        metadata = mock_insert.call_args.kwargs["metadata"]
+        metadata = mock_insert.call_args[1]["metadata"]
         assert "xai" not in metadata
 
 
