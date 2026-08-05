@@ -171,16 +171,7 @@ class ScanAlreadySyncedResponse(BaseModel):
     storage_path: str = Field(..., description="Object path within the storage bucket.")
 
 
-class ReferralRequest(BaseModel):
-    """Data contract representing a request to generate a referral QR payload.
 
-    Attributes:
-        patient_id: The universal identifier of the patient being referred.
-        diagnostic_summary: A clinical summary justifying the referral.
-    """
-
-    patient_id: str = Field(..., description="Unique patient identifier")
-    diagnostic_summary: str = Field(..., description="Clinical summary for referral")
 
 
 class GenerateReportRequest(BaseModel):

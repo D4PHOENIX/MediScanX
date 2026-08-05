@@ -21,7 +21,6 @@ from app.api.ecg_router import router as ecg_router
 from app.api.fusion_router import router as fusion_router
 from app.api.health import router as health_router
 from app.api.patient_router import router as patient_router
-from app.api.referral_router import router as referral_router
 from app.api.scans_router import router as scans_router
 from app.api.skin_router import router as skin_router
 from app.api.report_router import router as report_router
@@ -145,7 +144,6 @@ def create_app() -> FastAPI:
     application.include_router(agent_router, prefix=api_prefix)
     application.include_router(fusion_router, prefix=api_prefix)
     application.include_router(patient_router, prefix=api_prefix)
-    application.include_router(referral_router, prefix=api_prefix)
     application.include_router(health_router, prefix=api_prefix)
     application.include_router(webhook_router, prefix=api_prefix)
     application.include_router(report_router, prefix=api_prefix)
