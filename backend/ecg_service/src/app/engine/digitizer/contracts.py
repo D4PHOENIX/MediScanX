@@ -1,7 +1,7 @@
 from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Final, tuple, list
+from typing import Final, Tuple, List
 import numpy as np
 import numpy.typing as npt
 

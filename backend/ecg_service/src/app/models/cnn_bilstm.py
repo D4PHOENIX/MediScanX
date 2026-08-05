@@ -195,6 +195,8 @@ class ECGClassifier(nn.Module):
                 "Ensure the weights volume is mounted at /models."
             )
 
+        # Note: weights_only=False is required because PyTorch Lightning .ckpt files
+        # serialize _hparams hyperparameter dictionaries which fail weights_only=True unpickling.
         ckpt: Dict[str, Any] = torch.load(
             str(path),
             map_location="cpu",

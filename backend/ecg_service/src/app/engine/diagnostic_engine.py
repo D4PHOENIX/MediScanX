@@ -218,7 +218,7 @@ class ECGDiagnosticEngine:
             "predicted_class": (
                 top_findings[0]["label"] if top_findings else None
             ),
-            "predicted_confidence": (
+            "confidence": (
                 top_findings[0]["confidence"] if top_findings else None
             ),
             "gradcam_overlay": (
