@@ -35,7 +35,7 @@ def test_preprocessor_coverage_gate() -> None:
          
         # 1. Coverage above threshold on all leads passes
         tensor, _ = preprocessor.process_image("fake_path")
-        assert tensor.shape == (1, 12, 500)
+        assert tensor.shape == (1, 12, 250)
         
         # 2. A single lead below threshold raises ECGExtractionError
         bad_lead = np.zeros((height, width), dtype=np.uint8)

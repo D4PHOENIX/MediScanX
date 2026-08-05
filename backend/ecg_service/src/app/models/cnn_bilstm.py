@@ -67,20 +67,20 @@ class ECGClassifier(nn.Module):
         """
         super().__init__()
 
-        # Convolutional feature extractor 
-        # Three progressively deeper stages, each halving the temporal dimension.
-        self.conv1: nn.Conv1d = nn.Conv1d(num_leads, 64, kernel_size=5, padding=2)
+        # Convolutional feature extractor (3rd Experimentation architecture)
+        # Three progressively deeper stages, shared pool halving temporal axis.
+        self.conv1: nn.Conv1d = nn.Conv1d(num_leads, 64, kernel_size=7, padding=3, bias=False)
         self.bn1: nn.BatchNorm1d = nn.BatchNorm1d(64)
-        self.pool1: nn.MaxPool1d = nn.MaxPool1d(kernel_size=2)
 
-        self.conv2: nn.Conv1d = nn.Conv1d(64, 128, kernel_size=5, padding=2)
+        self.conv2: nn.Conv1d = nn.Conv1d(64, 128, kernel_size=5, padding=2, bias=False)
         self.bn2: nn.BatchNorm1d = nn.BatchNorm1d(128)
-        self.pool2: nn.MaxPool1d = nn.MaxPool1d(kernel_size=2)
 
         # conv3 is the Grad-CAM target layer — its output is hooked by GradCAM1D.
-        self.conv3: nn.Conv1d = nn.Conv1d(128, 256, kernel_size=3, padding=1)
+        self.conv3: nn.Conv1d = nn.Conv1d(128, 256, kernel_size=3, padding=1, bias=False)
         self.bn3: nn.BatchNorm1d = nn.BatchNorm1d(256)
-        self.pool3: nn.MaxPool1d = nn.MaxPool1d(kernel_size=2)
+
+        # Single shared max-pooling layer (used after each conv stage)
+        self.pool: nn.MaxPool1d = nn.MaxPool1d(kernel_size=2)
 
         # Temporal context encoder 
         # Bidirectional: hidden_size 128 × 2 directions = 256 output features.
@@ -90,6 +90,7 @@ class ECGClassifier(nn.Module):
             num_layers=2,
             batch_first=True,
             bidirectional=True,
+            dropout=0.3,
         )
 
         # Classification 
@@ -108,29 +109,29 @@ class ECGClassifier(nn.Module):
         on ``self.conv3`` will capture the post-activation output produced here.
 
         Args:
-            x (torch.Tensor): Normalised 12-lead signals of shape ``(B, 12, 500)``.
+            x (torch.Tensor): Normalised 12-lead signals of shape ``(B, 12, 250)``.
 
         Returns:
-            torch.Tensor: Convolutional feature maps of shape ``(B, 256, 62)``.
+            torch.Tensor: Convolutional feature maps of shape ``(B, 256, 31)``.
         """
-        x = self.pool1(F.relu(self.bn1(self.conv1(x))))  # (B, 64,  250)
-        x = self.pool2(F.relu(self.bn2(self.conv2(x))))  # (B, 128, 125)
-        x = self.pool3(F.relu(self.bn3(self.conv3(x))))  # (B, 256,  62)
+        x = self.pool(F.relu(self.bn1(self.conv1(x))))  # (B, 64,  125)
+        x = self.pool(F.relu(self.bn2(self.conv2(x))))  # (B, 128,  62)
+        x = self.pool(F.relu(self.bn3(self.conv3(x))))  # (B, 256,  31)
         return x
 
     def classify_features(self, features: torch.Tensor) -> torch.Tensor:
         """Classify pre-extracted CNN feature maps via BiLSTM + FC head.
 
         Args:
-            features (torch.Tensor): CNN output of shape ``(B, 256, 62)``.
+            features (torch.Tensor): CNN output of shape ``(B, 256, 31)``.
 
         Returns:
             torch.Tensor: Raw logits of shape ``(B, 5)``.
         """
-        # Permute: (B, 256, 62) → (B, 62, 256) for LSTM batch_first convention
+        # Permute: (B, 256, 31) → (B, 31, 256) for LSTM batch_first convention
         seq: torch.Tensor
         _: torch.Tensor
-        seq, _ = self.lstm(features.permute(0, 2, 1))  # (B, 62, 256)
+        seq, _ = self.lstm(features.permute(0, 2, 1))  # (B, 31, 256)
 
         # Global average pooling over the temporal dimension
         pooled: torch.Tensor = torch.mean(seq, dim=1)                # (B, 256)
@@ -143,7 +144,7 @@ class ECGClassifier(nn.Module):
         """Full forward pass: CNN trunk → BiLSTM head → logits.
 
         Args:
-            x (torch.Tensor): Batch of normalised 12-lead ECG signals. Shape: ``(B, 12, 500)``.
+            x (torch.Tensor): Batch of normalised 12-lead ECG signals. Shape: ``(B, 12, 250)``.
 
         Returns:
             torch.Tensor: Raw (pre-sigmoid) class logits. Shape: ``(B, 5)``.
@@ -194,10 +195,12 @@ class ECGClassifier(nn.Module):
                 "Ensure the weights volume is mounted at /models."
             )
 
+        # Note: weights_only=False is required because PyTorch Lightning .ckpt files
+        # serialize _hparams hyperparameter dictionaries which fail weights_only=True unpickling.
         ckpt: Dict[str, Any] = torch.load(
             str(path),
             map_location="cpu",
-            weights_only=True,
+            weights_only=False,
         )
         state_dict: Dict[str, Any] = ckpt.get("state_dict", ckpt)
 

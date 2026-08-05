@@ -24,8 +24,8 @@ def test_preprocessor_fault_injection() -> None:
         with pytest.raises(InvalidLeadCountError):
             preprocessor.process_wfdb("fake_record")
             
-        # 2. Clipped signal length (e.g., 300 instead of 500)
-        mock_rdsamp.return_value = (np.random.randn(300, 12), None)
+        # 2. Genuinely short signal (150 samples < 250 contract) triggers mismatch
+        mock_rdsamp.return_value = (np.random.randn(150, 12), None)
         with pytest.raises(SignalLengthMismatchError):
             preprocessor.process_wfdb("fake_record")
 
@@ -41,9 +41,9 @@ def test_finiteness_gate() -> None:
     mock_preprocessor = MagicMock()
     
     # Preprocessor returns a tensor with a NaN
-    bad_tensor = torch.ones((1, 12, 500))
+    bad_tensor = torch.ones((1, 12, 250))
     bad_tensor[0, 0, 0] = float('nan')
-    mock_preprocessor.process_wfdb.return_value = (bad_tensor, np.ones((12, 500)))
+    mock_preprocessor.process_wfdb.return_value = (bad_tensor, np.ones((12, 250)))
     
     engine = ECGDiagnosticEngine(
         cfg=mock_cfg,

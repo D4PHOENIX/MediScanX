@@ -24,7 +24,7 @@ def test_diagnostic_makedirs_permission_error_does_not_fail_inference(mock_extra
         'V1': np.zeros((10, 10), dtype=np.uint8), 'V2': np.zeros((10, 10), dtype=np.uint8), 'V3': np.zeros((10, 10), dtype=np.uint8),
         'V4': np.zeros((10, 10), dtype=np.uint8), 'V5': np.zeros((10, 10), dtype=np.uint8), 'V6': np.zeros((10, 10), dtype=np.uint8),
     }
-    mock_extract.return_value = (np.zeros(500, dtype=np.float32), 1.0, False)
+    mock_extract.return_value = (np.zeros(250, dtype=np.float32), 1.0, False)
     
     cfg = Settings()
     preprocessor = ECGPreprocessor(cfg)
@@ -33,7 +33,7 @@ def test_diagnostic_makedirs_permission_error_does_not_fail_inference(mock_extra
         tensor, signals = preprocessor.process_image("dummy.jpg", diagnostic_mode=True)
         assert tensor is not None
         assert signals is not None
-        assert tensor.shape == (1, 12, 500)
+        assert tensor.shape == (1, 12, 250)
 
 @patch("app.engine.preprocessor._ECGGridSlicer.slice_image")
 @patch("app.engine.preprocessor._PinkGridRemover.remove_grid")
@@ -46,7 +46,7 @@ def test_diagnostic_imwrite_oserror_returns_bit_identical(mock_extract, mock_rem
         'V1': np.zeros((10, 10), dtype=np.uint8), 'V2': np.zeros((10, 10), dtype=np.uint8), 'V3': np.zeros((10, 10), dtype=np.uint8),
         'V4': np.zeros((10, 10), dtype=np.uint8), 'V5': np.zeros((10, 10), dtype=np.uint8), 'V6': np.zeros((10, 10), dtype=np.uint8),
     }
-    mock_extract.return_value = (np.random.randn(500).astype(np.float32), 1.0, False)
+    mock_extract.return_value = (np.random.randn(250).astype(np.float32), 1.0, False)
     
     cfg = Settings()
     preprocessor = ECGPreprocessor(cfg)

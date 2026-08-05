@@ -51,7 +51,7 @@ async def predict(
     file: Optional[UploadFile] = File(None, description="Single ECG image file"),
     wfdb_files: Optional[List[UploadFile]] = File(None, description="Pair of .dat and .hea WFDB files"),
     top_k: int = Form(5, description="Number of top classes to return"),
-    xai: bool = Query(default=False, description="Set to true to include a base64-encoded Grad-CAM overlay."),
+    xai: bool = Query(default=True, description="Set to true to include a base64-encoded Grad-CAM overlay."),
     engine: ECGEngine = Depends(get_engine)
 ) -> JSONResponse:
     """Accept an ECG signal or image, run inference, and return diagnostic findings.

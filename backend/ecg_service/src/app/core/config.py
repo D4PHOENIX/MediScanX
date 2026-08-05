@@ -20,20 +20,49 @@ class Settings(BaseSettings):
 
     # Model Paths 
     onnx_model_path: str = Field(default="/models/ecg_v2_12lead.onnx", alias="ECG_ONNX_PATH")
-    pytorch_ckpt_path: str = Field(default="/models/ecg_v2_12lead.ckpt", alias="ECG_CKPT_PATH")
+    
+    # ------------------------------------------------------------------
+    # Model parameters — matched to 3rd Experimentation architecture
+    # (PTB-XL 100 Hz, 2.5-second windows, 5 superclasses)
+    # ------------------------------------------------------------------
+    seq_length: int = Field(
+        default=250,
+        description="Temporal sequence length (250 samples = 2.5 s @ 100 Hz).",
+    )
+    num_leads: int = Field(default=12, description="Number of ECG leads.")
+    num_classes: int = Field(
+        default=5,
+        description="Number of output diagnostic superclasses.",
+    )
+    ecg_labels: List[str] = Field(
+        default_factory=lambda: ["NORM", "MI", "STTC", "CD", "HYP"],
+        description="ECG diagnostic superclass labels in model output order.",
+    )
+    ecg_thresholds: List[float] = Field(
+        default_factory=lambda: [0.49, 0.38, 0.47, 0.49, 0.46],
+        description="Per-class calibrated classification thresholds (Notebook 04b, Fold 9).",
+    )
+    classification_threshold: float = Field(
+        default=0.5,
+        description="Fallback classification threshold for individual binary decisions.",
+    )
 
-    # Keep backwards compatibility aliases if needed
-    ecg_onnx_path: str = Field(default="/models/ecg_v2_12lead.onnx")
-    ecg_ckpt_path: str = Field(default="/models/ecg_v2_12lead.ckpt")
-
-    # Architecture Constants
-    num_leads: int = 12
-    seq_length: int = 500
-    num_classes: int = 5
-    ecg_labels: List[str] = Field(default_factory=lambda: ["NORM", "MI", "STTC", "CD", "HYP"])
-
-    # Clinical Decision Boundaries
-    classification_threshold: float = 0.5
+    # ------------------------------------------------------------------
+    # Weights / Artefacts
+    # ------------------------------------------------------------------
+    ecg_onnx_path: str = Field(
+        default="/models/mediscanx_ecg_3rdexp_finetuned.onnx",
+        description="Path to the ONNX runtime model binary.",
+    )
+    ecg_ckpt_path: str = Field(
+        default="/models/mediscanx_ecg_3rdexp_finetuned.ckpt",
+        description="Path to the PyTorch Lightning checkpoint file.",
+    )
+    pytorch_ckpt_path: str = Field(
+        default="/models/mediscanx_ecg_3rdexp_finetuned.ckpt",
+        alias="ECG_CKPT_PATH",
+        description="Alias for ecg_ckpt_path to support legacy test assertions.",
+    )
 
     # Hardware
     device: str = "cpu"

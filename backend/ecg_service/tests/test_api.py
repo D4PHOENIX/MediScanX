@@ -23,7 +23,7 @@ async def test_predict_wfdb_mode(test_app, async_client: AsyncClient) -> None:
             {"label": "NORM", "class_idx": 0, "confidence": 0.94, "overlay_img": None}
         ],
         "predicted_class": "NORM",
-        "predicted_confidence": 0.94,
+        "confidence": 0.94,
         "gradcam_overlay": None,
         "inference_time_ms": 8.5,
         "patient_id": "test_record",
@@ -68,7 +68,7 @@ async def test_predict_image_mode(test_app, async_client: AsyncClient) -> None:
     mock_engine.predict = AsyncMock(return_value={
         "predictions": [{"label": "MI", "class_idx": 1, "confidence": 0.88, "overlay_img": None}],
         "predicted_class": "MI",
-        "predicted_confidence": 0.88,
+        "confidence": 0.88,
         "gradcam_overlay": None,
         "inference_time_ms": 14.2,
         "patient_id": "ecg.jpg",

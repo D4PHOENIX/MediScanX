@@ -1,5 +1,5 @@
 import numpy as np
-from app.core.optical_digitizer import digitize_ecg
+from app.engine.digitizer import digitize_ecg
 
 def test_digitize_ecg_fails_closed_on_blank_image():
     img = np.zeros((800, 1200, 3), dtype=np.uint8)
