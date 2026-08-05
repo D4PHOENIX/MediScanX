@@ -17,8 +17,11 @@ async def test_assetlinks_json_valid(test_app):
         assert "delegate_permission/common.handle_all_urls" in entry["relation"]
         assert "target" in entry
         assert entry["target"]["namespace"] == "android_app"
-        assert entry["target"]["package_name"] == "com.example.mediscanx"
-        assert "CA:8F:29:BB:52:9F:C5:B4:80:7E:EB:42:E5:0E:C1:EE:2F:A1:50:4E:2A:C3:EA:BE:F4:1A:4A:DF:94:76:98:D2" in entry["target"]["sha256_cert_fingerprints"]
+        from app.core.config import gateway_config
+        assert entry["target"]["package_name"] == gateway_config.android_package_name
+        
+        expected_fingerprints = [fp.strip() for fp in gateway_config.android_cert_fingerprints.split(",") if fp.strip()]
+        assert expected_fingerprints == entry["target"]["sha256_cert_fingerprints"]
 
 
 @pytest.mark.asyncio
