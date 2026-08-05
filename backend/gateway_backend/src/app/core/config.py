@@ -40,6 +40,9 @@ class GatewayConfig(BaseSettings):
     database_url: str | None = None
     claim_base_url: str = Field(default_factory=lambda: os.getenv("CLAIM_BASE_URL", "https://mediscanx.app/claim"))
 
+    android_package_name: str = Field(default_factory=lambda: os.getenv("ANDROID_PACKAGE_NAME", "com.example.mediscanx"))
+    android_cert_fingerprints: str
+
     gemini_api_key: Optional[str] = Field(default_factory=lambda: os.getenv("GEMINI_API_KEY", None))
     google_model: str = Field(default_factory=lambda: os.getenv("GOOGLE_MODEL", "gemini-3.5-flash"))
 
