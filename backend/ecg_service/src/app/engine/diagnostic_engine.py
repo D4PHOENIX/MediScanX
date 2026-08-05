@@ -83,7 +83,6 @@ class ECGDiagnosticEngine:
         use_gradcam: bool = False,
         top_k: int = 5,
         diagnostic_mode: bool = False,
-        diagnostic_out_dir: str = "/app/data/ecg_diagnostics",
     ) -> Dict[str, Any]:
         """Execute a synchronous diagnostic pass.
 
@@ -93,6 +92,10 @@ class ECGDiagnosticEngine:
             use_gradcam (bool): If ``True``, use the PyTorch backend and generate
                 Grad‑CAM overlays. Defaults to False.
             top_k (int): Number of findings to return. Defaults to 5.
+            diagnostic_mode (bool): If ``True``, write debug images and signals to
+                ``cfg.ecg_diagnostic_dir`` (default ``/app/data/ecg_diagnostics``).
+                Directory is configured via ``Settings.ecg_diagnostic_dir``; there
+                is no per-call path override (removed in commit 712abc8).
 
         Returns:
             Dict[str, Any]: Dictionary conforming to the diagnostic‑result schema.
@@ -111,9 +114,8 @@ class ECGDiagnosticEngine:
             tensor, signal_array = self.preprocessor.process_wfdb(input_path)
         elif input_type == 'image':
             tensor, signal_array = self.preprocessor.process_image(
-                input_path, 
-                diagnostic_mode=diagnostic_mode, 
-                diagnostic_out_dir=diagnostic_out_dir
+                input_path,
+                diagnostic_mode=diagnostic_mode,
             )
         else:
             raise ValueError(f"Unsupported input_type: {input_type!r}")

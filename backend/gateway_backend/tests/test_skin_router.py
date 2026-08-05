@@ -164,7 +164,7 @@ async def test_skin_persists_expected_modality(auth_headers) -> None:
         )
         assert response.status_code == 200
         assert mock_insert.called
-        kwargs = mock_insert.call_args.kwargs
+        kwargs = mock_insert.call_args[1]
         assert kwargs["modality"] == "skin"
         assert kwargs["scan_type"] == 2
 
@@ -203,7 +203,7 @@ async def test_skin_overlay_objects_land_in_expected_path(auth_headers, fake_ml_
 
         # First storage call is the index-0 overlay
         first_overlay_call_kwargs = mock_storage.call_args_list[0].kwargs
-        insert_kwargs = mock_insert.call_args.kwargs
+        insert_kwargs = mock_insert.call_args[1]
         expected_user_id = insert_kwargs["user_id"]
         expected_scan_id = insert_kwargs["scan_id"]
 
@@ -242,7 +242,7 @@ async def test_skin_overlay_upload_failure(auth_headers, fake_ml_data) -> None:
         )
 
         assert response.status_code == 200
-        kwargs = mock_insert.call_args.kwargs
+        kwargs = mock_insert.call_args[1]
         assert kwargs["xai_status"] == "failed"
         assert kwargs.get("xai_path") is None
         # Scan itself must still be persisted
@@ -276,7 +276,7 @@ async def test_skin_no_overlays(auth_headers) -> None:
         )
 
         assert response.status_code == 200
-        kwargs = mock_insert.call_args.kwargs
+        kwargs = mock_insert.call_args[1]
         assert kwargs["xai_status"] == "none"
         assert kwargs.get("xai_path") is None
 
@@ -308,7 +308,7 @@ async def test_skin_original_img_absent_from_metadata(auth_headers, fake_ml_data
             files={"file": ("skin.jpg", b"data", "image/jpeg")},
         )
 
-        metadata = mock_insert.call_args.kwargs["metadata"]
+        metadata = mock_insert.call_args[1]["metadata"]
         assert "original_img" not in metadata
 
 
@@ -339,7 +339,7 @@ async def test_skin_overlay_img_absent_overlay_path_present(auth_headers, fake_m
             files={"file": ("skin.jpg", b"data", "image/jpeg")},
         )
 
-        metadata = mock_insert.call_args.kwargs["metadata"]
+        metadata = mock_insert.call_args[1]["metadata"]
         assert "overlay_img" not in metadata["top_findings"][0]
         assert "overlay_path" in metadata["top_findings"][0]
 
@@ -407,7 +407,7 @@ async def test_skin_metadata_size_bounded(auth_headers, fake_ml_data) -> None:
             files={"file": ("skin.jpg", b"data", "image/jpeg")},
         )
 
-        metadata = mock_insert.call_args.kwargs["metadata"]
+        metadata = mock_insert.call_args[1]["metadata"]
         metadata_str = json.dumps(metadata)
         assert len(metadata_str) < 4096
 
@@ -443,7 +443,7 @@ async def test_skin_xai_false(auth_headers) -> None:
         # mock_storage should be called ONCE (for the main image), not for overlay
         assert mock_storage.call_count == 1
         
-        kwargs = mock_insert.call_args.kwargs
+        kwargs = mock_insert.call_args[1]
         assert kwargs["xai_status"] == "none"
         assert kwargs.get("xai_path") is None
         assert response.json()["explainability"]["status"] == "none"

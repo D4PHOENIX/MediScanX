@@ -255,7 +255,7 @@ async def test_scan_type_unchanged_by_modality_write(auth_headers) -> None:
             files={"file": ("scan.jpg", b"fake", "image/jpeg")},
         )
         assert response.status_code == 200
-        kwargs = mock_insert.call_args.kwargs
+        kwargs = mock_insert.call_args[1]
         assert kwargs["scan_type"] == 1
 
 
@@ -290,7 +290,7 @@ async def test_sync_modality_form_takes_precedence_over_metadata(auth_headers) -
             files={"file": ("scan.jpg", b"fake", "image/jpeg")},
         )
         assert response.status_code == 200
-        kwargs = mock_insert.call_args.kwargs
+        kwargs = mock_insert.call_args[1]
         assert kwargs["modality"] == "cxr"
 
 
@@ -511,7 +511,7 @@ async def test_sync_happy_path_returns_200_with_storage_path(auth_headers) -> No
         assert data["status"] == "synced"
         assert data["storage_path"] == uploaded_path
 
-        insert_kwargs = mock_insert.call_args.kwargs
+        insert_kwargs = mock_insert.call_args[1]
         assert insert_kwargs["inference_source"] == "edge"
 
         mock_upload.assert_called_once()
@@ -715,6 +715,6 @@ async def test_edge_sync_insert_passes_skipped_edge_xai_status(auth_headers) -> 
         )
         assert response.status_code == 200
 
-        insert_kwargs = mock_insert.call_args.kwargs
+        insert_kwargs = mock_insert.call_args[1]
         assert insert_kwargs["xai_status"] == "skipped_edge"
         assert insert_kwargs.get("xai_path") is None
