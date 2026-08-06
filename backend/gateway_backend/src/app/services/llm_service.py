@@ -83,13 +83,19 @@ async def generate_hedged_text(prompt: str) -> Optional[str]:
             return text
             
     except HTTPError as exc:
-        logger.warning("generate_hedged_text HTTPError: %s", exc)
+        logger.warning(
+            "generate_hedged_text %s: %s", type(exc).__name__, str(exc) or "(no detail)"
+        )
         return None
     except ValueError as exc:
         # Catch JSONDecodeError
-        logger.warning("generate_hedged_text failed to parse JSON: %s", exc)
+        logger.warning(
+            "generate_hedged_text %s: %s", type(exc).__name__, str(exc) or "(no detail)"
+        )
         return None
     except Exception as exc:
         # Catch-all to ensure we never fail the parent request
-        logger.warning("generate_hedged_text unexpected error: %s", exc)
+        logger.warning(
+            "generate_hedged_text %s: %s", type(exc).__name__, str(exc) or "(no detail)"
+        )
         return None

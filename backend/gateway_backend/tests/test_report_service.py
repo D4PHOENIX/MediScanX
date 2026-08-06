@@ -144,7 +144,7 @@ async def test_download_endpoint_unauthorized_is_rejected(auth_headers):
         mock_bucket.create_signed_url.assert_not_called()
 
 
-@patch("app.services.report_layout.Paragraph")
+@patch("app.services.report_service.Paragraph")
 def test_pdf_story_contains_xai_status_text(mock_paragraph):
     gen = ReportGenerator()
     patient_id = "patient-123"
@@ -269,7 +269,7 @@ async def test_download_endpoint_null_expiry_granted(auth_headers):
 # Test 15: PDF Story contains AI Summary when present
 # ---------------------------------------------------------------------------
 
-@patch("app.services.report_layout.Paragraph")
+@patch("app.services.report_service.Paragraph")
 def test_pdf_story_contains_ai_summary(mock_paragraph):
     gen = ReportGenerator()
     patient_id = "patient-123"
@@ -290,7 +290,7 @@ def test_pdf_story_contains_ai_summary(mock_paragraph):
     assert "This summary is AI-generated and may be incomplete or inaccurate. It is not a diagnosis. Discuss these results with a qualified clinician." in called_texts
 
 
-@patch("app.services.report_layout.Paragraph")
+@patch("app.services.report_service.Paragraph")
 def test_pdf_story_omits_ai_summary_when_none(mock_paragraph):
     gen = ReportGenerator()
     patient_id = "patient-123"
@@ -310,7 +310,7 @@ def test_pdf_story_omits_ai_summary_when_none(mock_paragraph):
     assert "This summary is AI-generated and may be incomplete or inaccurate. It is not a diagnosis. Discuss these results with a qualified clinician." not in called_texts
 
 
-@patch("app.services.report_layout.SimpleDocTemplate")
+@patch("app.services.report_service.SimpleDocTemplate")
 def test_pdf_story_contains_watermark(mock_doc_class):
     mock_doc = MagicMock()
     mock_doc.page = 1
