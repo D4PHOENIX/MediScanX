@@ -144,7 +144,7 @@ async def test_download_endpoint_unauthorized_is_rejected(auth_headers):
         mock_bucket.create_signed_url.assert_not_called()
 
 
-@patch("app.services.report_service.Paragraph")
+@patch("app.services.report_layout.Paragraph")
 def test_pdf_story_contains_xai_status_text(mock_paragraph):
     gen = ReportGenerator()
     patient_id = "patient-123"
@@ -269,7 +269,7 @@ async def test_download_endpoint_null_expiry_granted(auth_headers):
 # Test 15: PDF Story contains AI Summary when present
 # ---------------------------------------------------------------------------
 
-@patch("app.services.report_service.Paragraph")
+@patch("app.services.report_layout.Paragraph")
 def test_pdf_story_contains_ai_summary(mock_paragraph):
     gen = ReportGenerator()
     patient_id = "patient-123"
@@ -290,7 +290,7 @@ def test_pdf_story_contains_ai_summary(mock_paragraph):
     assert "This summary is AI-generated and may be incomplete or inaccurate. It is not a diagnosis. Discuss these results with a qualified clinician." in called_texts
 
 
-@patch("app.services.report_service.Paragraph")
+@patch("app.services.report_layout.Paragraph")
 def test_pdf_story_omits_ai_summary_when_none(mock_paragraph):
     gen = ReportGenerator()
     patient_id = "patient-123"
@@ -310,7 +310,7 @@ def test_pdf_story_omits_ai_summary_when_none(mock_paragraph):
     assert "This summary is AI-generated and may be incomplete or inaccurate. It is not a diagnosis. Discuss these results with a qualified clinician." not in called_texts
 
 
-@patch("app.services.report_service.SimpleDocTemplate")
+@patch("app.services.report_layout.SimpleDocTemplate")
 def test_pdf_story_contains_watermark(mock_doc_class):
     mock_doc = MagicMock()
     mock_doc.page = 1
@@ -341,3 +341,229 @@ def test_pdf_bytes_start_with_pdf():
     gen = ReportGenerator()
     pdf_bytes = gen._build_pdf_story("patient-123", [], {}, {})
     assert pdf_bytes.startswith(b"%PDF")
+
+
+@pytest.mark.asyncio
+async def test_generate_report_compensating_delete(auth_headers):
+    mock_supabase_client = MagicMock()
+    mock_bucket = AsyncMock()
+    mock_supabase_client.storage.from_.return_value = mock_bucket
+    mock_bucket.create_signed_url.return_value = {"signedURL": "https://signed.mock/report.pdf"}
+    mock_bucket.download.return_value = b"test"
+    app.state.supabase_client = mock_supabase_client
+
+    mock_conn = AsyncMock()
+    mock_conn.fetch.return_value = [{"scan_id": uuid.uuid4(), "modality": "CXR", "ai_diagnosis": "Pneumonia", "confidence": 0.95, "scan_date": datetime.datetime.now(datetime.timezone.utc), "xai_status": "none", "xai_path": None, "storage_path": None}]
+    
+    # Make execute fail to trigger compensating delete
+    mock_conn.execute.side_effect = Exception("DB error")
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.content = b"test"
+
+    with patch("asyncpg.connect", return_value=mock_conn), patch("httpx.AsyncClient.get", new_callable=AsyncMock, return_value=mock_response):
+        response = client.post(
+            "/api/v1/reports/generate",
+            json={"selected_scan_ids": [str(uuid.uuid4())], "patient_id": "test-dev-user"},
+            headers={"Authorization": "Bearer test-dev-token-secret"}
+        )
+        assert response.status_code == 500
+        # Assert compensating delete was called
+        mock_bucket.remove.assert_called_once()
+        uploaded_path = mock_bucket.remove.call_args[0][0][0]
+        assert "/" in uploaded_path  # verifying folder-based path
+
+
+@pytest.mark.asyncio
+async def test_generate_report_two_distinct_objects(auth_headers):
+    # Verify the two generated reports for the same patient have different paths (no overwrite)
+    mock_supabase_client = MagicMock()
+    mock_bucket = AsyncMock()
+    mock_supabase_client.storage.from_.return_value = mock_bucket
+    mock_bucket.create_signed_url.return_value = {"signedURL": "https://signed.mock/report.pdf"}
+    app.state.supabase_client = mock_supabase_client
+
+    mock_conn = AsyncMock()
+    mock_conn.fetch.return_value = [{"scan_id": uuid.uuid4(), "modality": "CXR", "ai_diagnosis": "Pneumonia", "confidence": 0.95, "scan_date": datetime.datetime.now(datetime.timezone.utc), "xai_status": "none", "xai_path": None, "storage_path": None}]
+
+    with patch("asyncpg.connect", return_value=mock_conn):
+        response1 = client.post("/api/v1/reports/generate", json={"selected_scan_ids": [str(uuid.uuid4())], "patient_id": "test-dev-user"}, headers={"Authorization": "Bearer test-dev-token-secret"})
+        response2 = client.post("/api/v1/reports/generate", json={"selected_scan_ids": [str(uuid.uuid4())], "patient_id": "test-dev-user"}, headers={"Authorization": "Bearer test-dev-token-secret"})
+        
+        assert response1.status_code == 200
+        assert response2.status_code == 200
+        
+        calls = mock_bucket.upload.call_args_list
+        assert len(calls) == 2
+        path1 = calls[0][1]["path"]
+        path2 = calls[1][1]["path"]
+        assert path1 != path2
+        assert "x-upsert" not in calls[0][1].get("file_options", {})
+
+
+@pytest.mark.asyncio
+async def test_get_reports_history(auth_headers):
+    mock_supabase_client = MagicMock()
+    mock_bucket = AsyncMock()
+    mock_supabase_client.storage.from_.return_value = mock_bucket
+    mock_bucket.create_signed_url.return_value = {"signedURL": "https://signed.mock/report.pdf"}
+    app.state.supabase_client = mock_supabase_client
+
+    mock_conn = AsyncMock()
+    # Mock total count
+    mock_conn.fetchval.return_value = 2
+    # Mock data rows
+    report_id1, report_id2 = str(uuid.uuid4()), str(uuid.uuid4())
+    mock_conn.fetch.return_value = [
+        {"report_id": report_id1, "user_id": "test-dev-user", "created_at": datetime.datetime.now(), "scan_count": 2, "storage_path": "path1"},
+        {"report_id": report_id2, "user_id": "other-user-uuid", "created_at": datetime.datetime.now(), "scan_count": 1, "storage_path": "path2"}
+    ]
+
+    from app.core.security import get_current_user
+    app.dependency_overrides[get_current_user] = lambda: "test-dev-user"
+
+    with patch("asyncpg.connect", return_value=mock_conn):
+        response = client.get("/api/v1/reports")
+        app.dependency_overrides.clear()
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 2
+        assert len(data["items"]) == 2
+        
+        # Verify user_id is not in response
+        assert "user_id" not in data["items"][0]
+        
+        # Verify PT- ref for other patient
+        assert data["items"][0]["patient_ref"] is None
+        assert data["items"][1]["patient_ref"] == "PT-OTHER-"
+        
+        # Verify limit and offset behave
+        called_query = mock_conn.fetch.call_args[0][0]
+        assert "LIMIT $2 OFFSET $3" in called_query
+        
+        # Verify care relationship expired is explicitly in query
+        assert "expires_at IS NULL OR expires_at > now()" in called_query
+
+
+@pytest.mark.asyncio
+async def test_delete_report_success(auth_headers):
+    mock_supabase_client = MagicMock()
+    mock_bucket = AsyncMock()
+    mock_supabase_client.storage.from_.return_value = mock_bucket
+    mock_bucket.remove.return_value = [{"name": "obj", "error": None}]  # simulated success response
+    app.state.supabase_client = mock_supabase_client
+
+    mock_conn = AsyncMock()
+    report_id = str(uuid.uuid4())
+    # User owns the report
+    mock_conn.fetchrow.return_value = {"user_id": "test-dev-user", "storage_path": "path"}
+
+    from app.core.security import get_current_user
+    app.dependency_overrides[get_current_user] = lambda: "test-dev-user"
+
+    with patch("asyncpg.connect", return_value=mock_conn):
+        response = client.delete(f"/api/v1/reports/{report_id}")
+        app.dependency_overrides.clear()
+        assert response.status_code == 204
+        
+        # Object and row both gone
+        mock_bucket.remove.assert_called_once_with(["path"])
+        mock_conn.execute.assert_called_once_with("DELETE FROM reports WHERE report_id = $1::uuid", report_id)
+
+
+@pytest.mark.asyncio
+async def test_delete_report_refuse_doctor(auth_headers):
+    mock_supabase_client = MagicMock()
+    mock_bucket = AsyncMock()
+    app.state.supabase_client = mock_supabase_client
+
+    mock_conn = AsyncMock()
+    report_id = str(uuid.uuid4())
+    # The SQL query filters by user_id = current_user, so if caller is not the owner, fetchrow returns None
+    mock_conn.fetchrow.return_value = None
+
+    from app.core.security import get_current_user
+    app.dependency_overrides[get_current_user] = lambda: "test-dev-user"
+
+    with patch("asyncpg.connect", return_value=mock_conn):
+        response = client.delete(f"/api/v1/reports/{report_id}")
+        app.dependency_overrides.clear()
+        # Even if doctor has care access, they are refused (404 indistinguishable from stranger)
+        assert response.status_code == 404
+        
+        mock_bucket.remove.assert_not_called()
+        mock_conn.execute.assert_not_called()
+
+        called_query = mock_conn.fetchrow.call_args[0][0]
+        called_args = mock_conn.fetchrow.call_args[0][1:]
+        assert "user_id = $2::uuid" in called_query
+        assert called_args == (report_id, "test-dev-user")
+        
+
+
+@pytest.mark.asyncio
+async def test_delete_report_storage_fail_leaves_row(auth_headers):
+    mock_supabase_client = MagicMock()
+    mock_bucket = AsyncMock()
+    mock_supabase_client.storage.from_.return_value = mock_bucket
+    app.state.supabase_client = mock_supabase_client
+
+    mock_conn = AsyncMock()
+    report_id = str(uuid.uuid4())
+    mock_conn.fetchrow.return_value = {"user_id": "test-dev-user", "storage_path": "path"}
+
+    from app.core.security import get_current_user
+    app.dependency_overrides[get_current_user] = lambda: "test-dev-user"
+
+    with patch("asyncpg.connect", return_value=mock_conn):
+        # Case 1: Empty list (object not found)
+        mock_bucket.remove.return_value = []
+        response = client.delete(f"/api/v1/reports/{report_id}")
+        assert response.status_code == 204
+        mock_conn.execute.assert_called_once_with("DELETE FROM reports WHERE report_id = $1::uuid", report_id)
+        mock_conn.execute.reset_mock()
+
+        # Case 2: List with error dict
+        mock_bucket.remove.return_value = [{"error": "Some storage error"}]
+        response = client.delete(f"/api/v1/reports/{report_id}")
+        assert response.status_code == 500
+        mock_conn.execute.assert_not_called()
+
+        # Case 3: Exception raised by remove
+        mock_bucket.remove.side_effect = Exception("Network error")
+        response = client.delete(f"/api/v1/reports/{report_id}")
+        assert response.status_code == 500
+        mock_conn.execute.assert_not_called()
+
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_delete_report_not_found_matches_unrelated(auth_headers):
+    mock_conn = AsyncMock()
+    
+    from app.core.security import get_current_user
+    app.dependency_overrides[get_current_user] = lambda: "test-dev-user"
+
+    with patch("asyncpg.connect", return_value=mock_conn):
+        # Case 1: Unrelated user (row exists, but user_id mismatch) - currently our query just returns None
+        mock_conn.fetchrow.return_value = None
+        response_unrelated = client.delete(f"/api/v1/reports/{str(uuid.uuid4())}")
+        
+        # Case 2: Nonexistent report_id (row does not exist)
+        mock_conn.fetchrow.return_value = None
+        response_notfound = client.delete(f"/api/v1/reports/{str(uuid.uuid4())}")
+        
+        assert response_unrelated.status_code == 404
+        assert response_notfound.status_code == 404
+        assert response_unrelated.json() == response_notfound.json()
+        
+        # Verify the query includes the ownership clause
+        called_query = mock_conn.fetchrow.call_args[0][0]
+        called_args = mock_conn.fetchrow.call_args[0][1:]
+        assert "user_id = $2::uuid" in called_query
+        assert len(called_args) == 2
+        assert called_args[1] == "test-dev-user"
+
+        app.dependency_overrides.clear()
