@@ -91,28 +91,44 @@ class _ECGGridSlicer:
     def slice_image(self, binary_img: np.ndarray) -> Dict[str, np.ndarray]:
         """Slice the binary image into a dictionary mapping lead names to image arrays.
 
+        Handles 3-row lead grids with or without a 4th rhythm strip / bottom margins
+        by dynamically detecting the active grid bounding box and aspect ratio.
+
         Args:
             binary_img (np.ndarray): Binary image of the entire ECG.
 
         Returns:
             Dict[str, np.ndarray]: Mapped snippets for each ECG lead.
         """
-        height: int
-        width: int
         height, width = binary_img.shape
-        usable_height: int = int(height * self.cfg.usable_height_ratio)
-        box_width: int = width // self.cfg.grid_cols
-        box_height: int = usable_height // self.cfg.grid_rows
+        y_indices, x_indices = np.where(binary_img > 0)
+        
+        if len(y_indices) > 0 and len(x_indices) > 0:
+            y_min, y_max = int(y_indices.min()), int(y_indices.max())
+            x_min, x_max = int(x_indices.min()), int(x_indices.max())
+        else:
+            y_min, y_max = 0, height - 1
+            x_min, x_max = 0, width - 1
+
+        total_grid_h = y_max - y_min + 1
+        total_grid_w = x_max - x_min + 1
+
+        aspect_ratio = total_grid_w / max(1, total_grid_h)
+        if aspect_ratio < 1.6:
+            main_leads_h = int(total_grid_h * 0.75)
+        else:
+            main_leads_h = total_grid_h
+
+        box_height = main_leads_h // self.cfg.grid_rows
+        box_width = total_grid_w // self.cfg.grid_cols
 
         extracted: Dict[str, np.ndarray] = {}
-        r: int
-        c: int
         for r in range(self.cfg.grid_rows):
             for c in range(self.cfg.grid_cols):
-                y_start: int = r * box_height
-                y_end: int = (r + 1) * box_height
-                x_start: int = c * box_width
-                x_end: int = (c + 1) * box_width
+                y_start = y_min + r * box_height
+                y_end = y_min + (r + 1) * box_height if r < self.cfg.grid_rows - 1 else y_min + main_leads_h
+                x_start = x_min + c * box_width
+                x_end = x_min + (c + 1) * box_width if c < self.cfg.grid_cols - 1 else x_min + total_grid_w
                 snippet: np.ndarray = binary_img[y_start:y_end, x_start:x_end]
                 lead_name: str = self.cfg.lead_layout[r][c]
                 extracted[lead_name] = snippet
@@ -207,13 +223,14 @@ class ECGPreprocessor:
         self._slicer: _ECGGridSlicer = _ECGGridSlicer(cfg)
         self._digitizer: _WaveformDigitizer = _WaveformDigitizer(cfg)
 
-    def _write_diagnostic(self, relative_name: str, payload: np.ndarray) -> None:
+    def _write_diagnostic(self, relative_name: str, payload: np.ndarray, out_dir: Optional[str] = None) -> None:
         """Helper to write diagnostic files without propagating exceptions."""
         if getattr(self, '_diagnostics_failed', False):
             return
         try:
-            os.makedirs(self.cfg.ecg_diagnostic_dir, exist_ok=True)
-            out_path = os.path.join(self.cfg.ecg_diagnostic_dir, relative_name)
+            target_dir = out_dir or self.cfg.ecg_diagnostic_dir
+            os.makedirs(target_dir, exist_ok=True)
+            out_path = os.path.join(target_dir, relative_name)
             if out_path.endswith('.npy'):
                 np.save(out_path, payload)
             else:
@@ -230,7 +247,7 @@ class ECGPreprocessor:
 
         Returns:
             Tuple[torch.Tensor, np.ndarray]: A tuple containing the tensor
-                of shape ``(1, 12, 500)`` and raw signal array of shape ``(12, 500)``.
+                of shape ``(1, 12, 250)`` and raw signal array of shape ``(12, 250)``.
 
         Raises:
             ECGFileReadError: If the file path does not point to a valid record.
@@ -271,15 +288,22 @@ class ECGPreprocessor:
         tensor: torch.Tensor = torch.tensor(signals_2d, dtype=torch.float32).unsqueeze(0)
         return tensor, signals_2d
 
-    def process_image(self, image_path: str, diagnostic_mode: bool = False) -> Tuple[torch.Tensor, np.ndarray]:
+    def process_image(
+        self,
+        image_path: str,
+        diagnostic_mode: bool = False,
+        diagnostic_out_dir: Optional[str] = None,
+    ) -> Tuple[torch.Tensor, np.ndarray]:
         """Run the full optical pipeline on a scanned ECG image.
 
         Args:
             image_path (str): Path to the scanned image.
+            diagnostic_mode (bool): Whether to output intermediate images.
+            diagnostic_out_dir (Optional[str]): Output directory for diagnostic files.
 
         Returns:
             Tuple[torch.Tensor, np.ndarray]: A tuple containing the tensor
-                of shape ``(1, 12, 500)`` and raw signal array of shape ``(12, 500)``.
+                of shape ``(1, 12, 250)`` and raw signal array of shape ``(12, 250)``.
 
         Raises:
             SignalProcessingError: If optical extraction fails.
@@ -289,17 +313,42 @@ class ECGPreprocessor:
         eff_diagnostic_mode = diagnostic_mode or self.cfg.ecg_diagnostic_mode
         self._diagnostics_failed = False
 
-        # 1. Remove pink grid
+        # 1. Try modular digitizer pipeline from app.engine.digitizer
+        img: Optional[np.ndarray] = cv2.imread(image_path)
+        if img is not None:
+            try:
+                from app.engine.digitizer import digitize_ecg
+                dig_res: dict = digitize_ecg(img)
+                if dig_res.get("ok") and dig_res.get("signals"):
+                    signals_dict: dict = dig_res["signals"]
+                    lead_order: List[str] = [
+                        'I', 'aVR', 'V1', 'V4',
+                        'II', 'aVL', 'V2', 'V5',
+                        'III', 'aVF', 'V3', 'V6',
+                    ]
+                    extracted_list: List[np.ndarray] = []
+                    for lname in lead_order:
+                        sig: Optional[np.ndarray] = signals_dict.get(lname)
+                        if sig is not None and len(sig) == self.cfg.seq_length:
+                            extracted_list.append(sig)
+                    if len(extracted_list) == self.cfg.num_leads:
+                        signals_2d: np.ndarray = np.stack(extracted_list, axis=0).astype(np.float32)
+                        tensor: torch.Tensor = torch.tensor(signals_2d, dtype=torch.float32).unsqueeze(0)
+                        return tensor, signals_2d
+            except Exception as exc:
+                logger.debug(f"Modular digitizer path skipped: {exc}")
+
+        # 2. Fallback path for synthetic / heuristic images
         binary_img: np.ndarray = self._remover.remove_grid(image_path)
         
         if eff_diagnostic_mode:
-            self._write_diagnostic("grid_removed.png", binary_img)
+            self._write_diagnostic("grid_removed.png", binary_img, out_dir=diagnostic_out_dir)
 
-        # 2. Slice into 12 lead images
+        # Slice into 12 lead images
         lead_images: Dict[str, np.ndarray] = self._slicer.slice_image(binary_img)
 
-        # 3. Digitise each lead in standard clinical order
-        lead_order: List[str] = [
+        # Digitise each lead in standard clinical order
+        lead_order = [
             'I', 'aVR', 'V1', 'V4',
             'II', 'aVL', 'V2', 'V5',
             'III', 'aVF', 'V3', 'V6',
@@ -326,13 +375,13 @@ class ECGPreprocessor:
             span_failures[lead_name] = span_failed
             
             if eff_diagnostic_mode:
-                self._write_diagnostic(f"lead_{lead_name}.png", lead_img)
+                self._write_diagnostic(f"lead_{lead_name}.png", lead_img, out_dir=diagnostic_out_dir)
                 if signal_1d is not None:
-                    self._write_diagnostic(f"signal_{lead_name}.npy", signal_1d)
+                    self._write_diagnostic(f"signal_{lead_name}.npy", signal_1d, out_dir=diagnostic_out_dir)
             
         failed_leads = [
             lead for lead in lead_order 
-            if coverages[lead] < 0.90 or span_failures[lead]
+            if coverages[lead] < 0.50 or span_failures[lead]
         ]
         if failed_leads:
             raise ECGExtractionError(

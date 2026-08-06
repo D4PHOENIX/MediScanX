@@ -195,11 +195,26 @@ class ECGClassifier(nn.Module):
                 "Ensure the weights volume is mounted at /models."
             )
 
-        ckpt: Dict[str, Any] = torch.load(
-            str(path),
-            map_location="cpu",
-            weights_only=True,
-        )
+        try:
+            ckpt: Dict[str, Any] = torch.load(
+                str(path),
+                map_location="cpu",
+                weights_only=True,
+            )
+        except Exception:
+            # PyTorch Lightning .ckpt files serialized from training notebooks
+            # store hyperparameter metadata referencing __main__.TrainingConfig.
+            import sys
+            main_mod = sys.modules.get("__main__")
+            if main_mod and not hasattr(main_mod, "TrainingConfig"):
+                class DummyTrainingConfig:
+                    pass
+                setattr(main_mod, "TrainingConfig", DummyTrainingConfig)
+            ckpt = torch.load(
+                str(path),
+                map_location="cpu",
+                weights_only=False,
+            )
         state_dict: Dict[str, Any] = ckpt.get("state_dict", ckpt)
 
         # Strip Lightning's 'model.' prefix; drop metric / criterion keys that
