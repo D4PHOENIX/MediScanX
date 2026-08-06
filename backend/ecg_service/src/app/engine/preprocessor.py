@@ -332,7 +332,13 @@ class ECGPreprocessor:
                         if sig is not None and len(sig) == self.cfg.seq_length:
                             extracted_list.append(sig)
                     if len(extracted_list) == self.cfg.num_leads:
-                        signals_2d: np.ndarray = np.stack(extracted_list, axis=0).astype(np.float32)
+                        signals_2d: np.ndarray = np.stack(
+                            [np.asarray(s, dtype=np.float32).reshape(-1) for s in extracted_list],
+                            axis=0,
+                        )
+                        mean = signals_2d.mean(axis=1, keepdims=True)
+                        std = signals_2d.std(axis=1, keepdims=True) + 1e-8
+                        signals_2d = ((signals_2d - mean) / std).astype(np.float32)
                         tensor: torch.Tensor = torch.tensor(signals_2d, dtype=torch.float32).unsqueeze(0)
                         return tensor, signals_2d
             except Exception as exc:

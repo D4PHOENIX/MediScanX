@@ -195,21 +195,29 @@ class ECGClassifier(nn.Module):
                 "Ensure the weights volume is mounted at /models."
             )
 
+        import sys
+        main_mod = sys.modules.get("__main__")
+        if main_mod and not hasattr(main_mod, "TrainingConfig"):
+            class DummyTrainingConfig:
+                pass
+            setattr(main_mod, "TrainingConfig", DummyTrainingConfig)
+            if hasattr(torch.serialization, "add_safe_globals"):
+                try:
+                    torch.serialization.add_safe_globals([DummyTrainingConfig])
+                except Exception:
+                    pass
+
         try:
             ckpt: Dict[str, Any] = torch.load(
                 str(path),
                 map_location="cpu",
                 weights_only=True,
             )
-        except Exception:
-            # PyTorch Lightning .ckpt files serialized from training notebooks
-            # store hyperparameter metadata referencing __main__.TrainingConfig.
-            import sys
-            main_mod = sys.modules.get("__main__")
-            if main_mod and not hasattr(main_mod, "TrainingConfig"):
-                class DummyTrainingConfig:
-                    pass
-                setattr(main_mod, "TrainingConfig", DummyTrainingConfig)
+        except Exception as exc:
+            logger.warning(
+                f"weights_only=True checkpoint load failed ({exc}); "
+                "falling back to weights_only=False for PyTorch Lightning metadata compatibility."
+            )
             ckpt = torch.load(
                 str(path),
                 map_location="cpu",
