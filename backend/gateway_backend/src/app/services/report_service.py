@@ -48,6 +48,27 @@ class ReportGenerator:
     """
 
     @staticmethod
+    async def sign_report_url(bucket, storage_path: str, raise_on_failure: bool = False) -> str | None:
+        """Create a signed URL for a report in storage.
+        
+        Args:
+            bucket: The Supabase storage bucket instance
+            storage_path: The path to the object
+            raise_on_failure: If true, raises RuntimeError on failure; else returns None and logs.
+        """
+        try:
+            signed_resp = await bucket.create_signed_url(storage_path, 60 * 60 * 24)  # 24 hours
+            signed_url = signed_resp.get("signedURL") or signed_resp.get("signedUrl")
+            if not signed_url:
+                raise RuntimeError("Could not extract signed URL from Supabase response")
+            return signed_url
+        except Exception as e:
+            logger.warning(f"Failed to sign URL for report at {storage_path}: {e}")
+            if raise_on_failure:
+                raise RuntimeError(f"Could not create signed URL: {e}") from e
+            return None
+
+    @staticmethod
     async def fetch_scan_metadata(dsn: str, selected_scan_ids: List[str], current_user: str) -> List[Dict[str, Any]]:
         """Retrieve diagnostic scan metadata securely scoped to a patient or authorized doctor.
         
@@ -275,7 +296,7 @@ class ReportGenerator:
         patient_id: str,
         scan_metadata: List[Dict[str, Any]],
         supabase_client: Any = None,
-    ) -> Tuple[bytes, str, str]:
+    ) -> Tuple[bytes, str, str, str]:
         """Generates a complete clinical PDF report with cloud storage integration.
 
         This orchestration method produces a preliminary PDF, secures a cloud storage
@@ -289,10 +310,11 @@ class ReportGenerator:
             supabase_client: The shared Supabase client (async or sync) from ``app.state``.
 
         Returns:
-            Tuple[bytes, str, str]: A tuple containing:
+            Tuple[bytes, str, str, str]: A tuple containing:
                 - The raw bytes of the final generated PDF report.
                 - The secure, signed URL providing temporary access to the report.
                 - The storage path identifier within the cloud bucket.
+                - The unique identifier for the generated report.
 
         Raises:
             RuntimeError: If the cloud storage provider fails to generate a signed access URL.
@@ -347,26 +369,12 @@ class ReportGenerator:
             )
             ai_summary = await generate_hedged_text(prompt)
 
-        # 1. Stage PDF without QR (so we can generate a signed URL)
-        stage_pdf = self._build_pdf_story(patient_id, scan_metadata, xai_images, original_images, ai_summary=ai_summary)
-        storage_path = f"{patient_id}_report.pdf"
+        # 1. Generate unique report ID and determine storage path
+        import uuid
+        report_id = uuid.uuid4()
+        storage_path = f"{patient_id}/{report_id}.pdf"
 
-        await bucket.upload(
-            path=storage_path,
-            file=stage_pdf,
-            file_options={
-                "content-type": "application/pdf",
-                "x-upsert": "true",
-            },
-        )
-
-        # 2. Obtain a signed URL pointing to the (still placeholder) object
-        signed_resp = await bucket.create_signed_url(storage_path, 60 * 60 * 24)  # 24 hours
-        signed_url = signed_resp.get("signedURL") or signed_resp.get("signedUrl")
-        if not signed_url:
-            raise RuntimeError("Could not create signed URL from Supabase")
-
-        # 3. Build the JWT token and the final QR image encoding the claim URL
+        # 2. Build the JWT token and the final QR image encoding the claim URL
         from jose import jwt
         from datetime import datetime, timedelta
         
@@ -384,17 +392,19 @@ class ReportGenerator:
         qr.make(fit=True)
         qr_img = qr.make_image(fill_color="black", back_color="white")
 
-        # 4. Build the final PDF that includes the QR image
+        # 3. Build the final PDF that includes the QR image
         final_pdf = self._build_pdf_story(patient_id, scan_metadata, xai_images, original_images, ai_summary=ai_summary, qr_img=qr_img)
 
-        # 5. Replace the placeholder object with the final PDF using x-upsert
+        # 4. Upload the final PDF as a distinct object
         await bucket.upload(
             path=storage_path,
             file=final_pdf,
             file_options={
                 "content-type": "application/pdf",
-                "x-upsert": "true",
             },
         )
 
-        return final_pdf, signed_url, storage_path
+        # 5. Obtain a signed URL pointing to the uploaded object
+        signed_url = await ReportGenerator.sign_report_url(bucket, storage_path, raise_on_failure=True)
+
+        return final_pdf, signed_url, storage_path, str(report_id)

@@ -150,7 +150,7 @@ class ScanSyncResponse(BaseModel):
 
     status: str = Field("synced", description='Always "synced" on first insert.')
     scan_id: str = Field(..., description="UUID of the persisted scan.")
-    image_url: str = Field(..., description="Authenticated URL of the uploaded scan image.")
+    image_url: str | None = Field(..., description="Authenticated URL of the uploaded scan image.")
     storage_path: str = Field(..., description="Object path within the storage bucket.")
 
 
@@ -218,7 +218,7 @@ class ClaimRequest(BaseModel):
 
 class ClaimResponse(BaseModel):
     """Response payload for a report claim."""
-    report_url: str = Field(..., description="Signed URL to access the PDF report.")
+    report_url: str | None = Field(..., description="Signed URL to access the PDF report.")
     access_granted: bool = Field(..., description="Whether ongoing access was granted to the caller.")
     patient_ref: Optional[str] = Field(None, description="Masked patient identifier (e.g. PT-1A2B3C).")
     access_expires_at: Optional[datetime] = Field(None, description="When the granted access expires.")
@@ -297,3 +297,18 @@ class FusionResponse(BaseModel):
     findings_summary: str = Field(default="")
     clinical_correlation: Optional[str] = None
     message: Optional[str] = None
+
+
+class ReportItem(BaseModel):
+    """A single generated clinical report."""
+    report_id: str
+    created_at: datetime
+    scan_count: int
+    url: str | None
+    patient_ref: Optional[str] = None
+
+
+class ReportListResponse(BaseModel):
+    """Paginated list of clinical reports."""
+    total_count: int
+    items: List[ReportItem]
