@@ -100,7 +100,7 @@ async def predict(
                 top_k=top_k,
                 input_type='image',
                 use_gradcam=xai,
-                diagnostic_mode=True,
+                diagnostic_mode=False,
             )
         finally:
             try:
