@@ -436,8 +436,8 @@ async def test_ecg_overlay_img_absent_overlay_path_present(auth_headers, fake_ec
         )
 
         metadata = mock_insert.call_args[1]["metadata"]
-        assert "overlay_img" not in metadata["predictions"][0]
-        assert "overlay_path" in metadata["predictions"][0]
+        assert "overlay_img" not in metadata["top_findings"][0]
+        assert "overlay_path" in metadata["top_findings"][0]
 
 
 @pytest.mark.asyncio
@@ -548,4 +548,41 @@ async def test_ecg_xai_status_and_path_together(auth_headers, fake_ecg_ml_data) 
             assert path is not None
         else:
             assert path is None
+
+@pytest.mark.asyncio
+async def test_ecg_frontend_contract_alignment(auth_headers) -> None:
+    """Test that the ECG response matches the frontend contract."""
+    mock_client = AsyncMock()
+    mock_response = MagicMock(spec=Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "predicted_class": "Atrial Fibrillation",
+        "confidence": 0.98,
+        "predictions": [{"label": "Atrial Fibrillation", "confidence": 0.98}]
+    }
+    mock_client.post.return_value = mock_response
+    app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
+
+    from unittest.mock import patch
+    with patch("app.api.ecg_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.ecg_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage:
+
+        mock_storage.return_value = ("url_main", "user123/scan456.png")
+
+        response = client.post(
+            "/api/v1/ecg/predict",
+            headers=auth_headers,
+            files={"file": ("ecg.jpg", b"data", "image/jpeg")},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert "top_findings" in data
+        assert "predictions" not in data
+        assert data["top_findings"] == [{"label": "Atrial Fibrillation", "confidence": 0.98}]
+        assert data["ai_diagnosis"] == "Atrial Fibrillation"
+        assert "scan_status" in data
 

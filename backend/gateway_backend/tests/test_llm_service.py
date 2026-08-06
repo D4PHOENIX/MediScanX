@@ -60,3 +60,13 @@ async def test_generate_hedged_text_empty_candidates():
         mock_post.return_value = mock_resp
         res = await generate_hedged_text("test prompt")
         assert res is None
+
+@pytest.mark.asyncio
+async def test_generate_hedged_text_empty_exception_logs_type(caplog):
+    import logging
+    with caplog.at_level(logging.WARNING):
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.side_effect = TimeoutException("")
+            res = await generate_hedged_text("test prompt")
+            assert res is None
+            assert "generate_hedged_text TimeoutException: (no detail)" in caplog.text

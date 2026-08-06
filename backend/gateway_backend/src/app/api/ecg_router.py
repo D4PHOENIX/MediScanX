@@ -267,4 +267,10 @@ async def ecg_predict(
             "modality": ScanModality.ECG.value,
         }
 
+        # Align ECG contract with frontend expectations
+        ml_result["ai_diagnosis"] = ai_diagnosis
+        ml_result["scan_status"] = scan_status
+        if "predictions" in ml_result:
+            ml_result["top_findings"] = ml_result.pop("predictions")
+
     return ml_result
