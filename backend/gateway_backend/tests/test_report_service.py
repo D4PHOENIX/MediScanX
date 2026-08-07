@@ -144,8 +144,35 @@ async def test_download_endpoint_unauthorized_is_rejected(auth_headers):
         mock_bucket.create_signed_url.assert_not_called()
 
 
-@patch("app.services.report_service.Paragraph")
-def test_pdf_story_contains_xai_status_text(mock_paragraph):
+def _extract_story_text(story: list) -> str:
+    """Extract visible text from generated PDF flowable tree."""
+    texts = []
+    def walk(flowable):
+        if hasattr(flowable, "text") and isinstance(flowable.text, str):
+            texts.append(flowable.text)
+        elif hasattr(flowable, "_cellvalues"):
+            for row in flowable._cellvalues:
+                for cell in row:
+                    if isinstance(cell, list):
+                        for item in cell:
+                            walk(item)
+                    else:
+                        walk(cell)
+    for flowable in story:
+        walk(flowable)
+    return " ".join(texts)
+
+
+@patch("app.services.report_layout.SimpleDocTemplate")
+def test_pdf_story_contains_xai_status_text(mock_doc_class):
+    mock_doc = MagicMock()
+    mock_doc_class.return_value = mock_doc
+    captured_story = []
+    def capture_build(story, *args, **kwargs):
+        captured_story.clear()
+        captured_story.extend(story)
+    mock_doc.build.side_effect = capture_build
+
     gen = ReportGenerator()
     patient_id = "patient-123"
     
@@ -159,13 +186,8 @@ def test_pdf_story_contains_xai_status_text(mock_paragraph):
         "xai_status": "none"
     }]
     gen._build_pdf_story(patient_id, scan_metadata_none, {}, {})
-    
-    # Check that Paragraph was called with the correct text
-    called_texts = [call.args[0] for call in mock_paragraph.call_args_list]
-    assert any("No heatmap is available for this scan (status: none)" in text for text in called_texts)
-    
-    # Reset mock for second test
-    mock_paragraph.reset_mock()
+    text_none = _extract_story_text(captured_story)
+    assert "No attention map available for this scan" in text_none
     
     # Test xai_status='generated'
     scan_metadata_gen = [{
@@ -179,8 +201,8 @@ def test_pdf_story_contains_xai_status_text(mock_paragraph):
     }]
     # With missing bytes (simulating failure to load)
     gen._build_pdf_story(patient_id, scan_metadata_gen, {}, {})
-    called_texts = [call.args[0] for call in mock_paragraph.call_args_list]
-    assert any("Heatmap available but failed to load" in text for text in called_texts)
+    text_gen = _extract_story_text(captured_story)
+    assert "Attention map could not be retrieved" in text_gen
 
 
 @pytest.mark.asyncio
@@ -269,8 +291,16 @@ async def test_download_endpoint_null_expiry_granted(auth_headers):
 # Test 15: PDF Story contains AI Summary when present
 # ---------------------------------------------------------------------------
 
-@patch("app.services.report_service.Paragraph")
-def test_pdf_story_contains_ai_summary(mock_paragraph):
+@patch("app.services.report_layout.SimpleDocTemplate")
+def test_pdf_story_contains_ai_summary(mock_doc_class):
+    mock_doc = MagicMock()
+    mock_doc_class.return_value = mock_doc
+    captured_story = []
+    def capture_build(story, *args, **kwargs):
+        captured_story.clear()
+        captured_story.extend(story)
+    mock_doc.build.side_effect = capture_build
+
     gen = ReportGenerator()
     patient_id = "patient-123"
     scan_metadata = [{
@@ -284,14 +314,50 @@ def test_pdf_story_contains_ai_summary(mock_paragraph):
     
     gen._build_pdf_story(patient_id, scan_metadata, {}, {}, ai_summary="Test AI summary text")
     
-    called_texts = [call.args[0] for call in mock_paragraph.call_args_list]
-    assert "AI-Generated Clinical Summary" in called_texts
-    assert "Test AI summary text" in called_texts
-    assert "This summary is AI-generated and may be incomplete or inaccurate. It is not a diagnosis. Discuss these results with a qualified clinician." in called_texts
+    text = _extract_story_text(captured_story)
+    assert "IMPRESSION" in text
+    assert "Test AI summary text" in text
+    assert "This summary is AI-generated and may be incomplete or inaccurate. It is not a diagnosis. Discuss these results with a qualified clinician." in text
+
+@pytest.mark.asyncio
+async def test_generate_report_passes_custom_timeout():
+    mock_supabase_client = MagicMock()
+    mock_bucket = AsyncMock()
+    mock_supabase_client.storage.from_.return_value = mock_bucket
+    mock_bucket.create_signed_url.return_value = {"signedURL": "https://signed.mock/report.pdf"}
+    
+    scan_metadata = [{
+        "id": "scan-1",
+        "modality": "CXR",
+        "ai_diagnosis": "Pneumonia",
+        "confidence": 0.95,
+        "timestamp": "2026-07-22T00:00:00Z",
+        "xai_status": "none",
+        "storage_path": None
+    }]
+    
+    with patch("app.services.report_service.generate_hedged_text", new_callable=AsyncMock) as mock_llm, \
+         patch("app.services.report_service.ReportGenerator.fetch_patient_header", new_callable=AsyncMock) as mock_header, \
+         patch("app.services.report_service.ReportGenerator._build_pdf_story", return_value=b"test"):
+         
+        gen = ReportGenerator()
+        await gen.generate_qr_report("patient-123", scan_metadata, supabase_client=mock_supabase_client)
+        
+        mock_llm.assert_awaited_once()
+        _, kwargs = mock_llm.call_args
+        assert kwargs.get("timeout") == 25.0
 
 
-@patch("app.services.report_service.Paragraph")
-def test_pdf_story_omits_ai_summary_when_none(mock_paragraph):
+@patch("app.services.report_layout.SimpleDocTemplate")
+def test_pdf_story_omits_ai_summary_when_none(mock_doc_class):
+    mock_doc = MagicMock()
+    mock_doc_class.return_value = mock_doc
+    captured_story = []
+    def capture_build(story, *args, **kwargs):
+        captured_story.clear()
+        captured_story.extend(story)
+    mock_doc.build.side_effect = capture_build
+
     gen = ReportGenerator()
     patient_id = "patient-123"
     scan_metadata = [{
@@ -305,12 +371,12 @@ def test_pdf_story_omits_ai_summary_when_none(mock_paragraph):
     
     gen._build_pdf_story(patient_id, scan_metadata, {}, {}, ai_summary=None)
     
-    called_texts = [call.args[0] for call in mock_paragraph.call_args_list]
-    assert "AI-Generated Clinical Summary" not in called_texts
-    assert "This summary is AI-generated and may be incomplete or inaccurate. It is not a diagnosis. Discuss these results with a qualified clinician." not in called_texts
+    text = _extract_story_text(captured_story)
+    assert "IMPRESSION" not in text
+    assert "This summary is AI-generated and may be incomplete or inaccurate" not in text
 
 
-@patch("app.services.report_service.SimpleDocTemplate")
+@patch("app.services.report_layout.SimpleDocTemplate")
 def test_pdf_story_contains_watermark(mock_doc_class):
     mock_doc = MagicMock()
     mock_doc.page = 1
@@ -326,7 +392,7 @@ def test_pdf_story_contains_watermark(mock_doc_class):
             # Verify watermark was drawn
             mock_canvas.drawCentredString.assert_any_call(0, 0, "MediScanX")
             # Verify transparency was set
-            mock_canvas.setFillAlpha.assert_called_with(0.15)
+            mock_canvas.setFillAlpha.assert_called_with(0.045)
             # Verify rotation
             mock_canvas.rotate.assert_called_with(45)
 

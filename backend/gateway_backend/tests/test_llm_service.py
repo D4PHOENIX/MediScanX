@@ -70,3 +70,24 @@ async def test_generate_hedged_text_empty_exception_logs_type(caplog):
             res = await generate_hedged_text("test prompt")
             assert res is None
             assert "generate_hedged_text TimeoutException: (no detail)" in caplog.text
+
+@pytest.mark.asyncio
+async def test_generate_hedged_text_timeout_argument():
+    # We patch AsyncClient at the class level to inspect its constructor arguments
+    with patch("app.services.llm_service.AsyncClient") as MockClient:
+        # Set up the mock context manager to yield a client with a mock post method
+        mock_instance = MockClient.return_value
+        mock_instance.__aenter__.return_value = mock_instance
+        mock_post = AsyncMock()
+        mock_post.return_value = Response(200, request=Request("POST", "url"), json={
+            "candidates": [{"content": {"parts": [{"text": "Success"}]}}]
+        })
+        mock_instance.post = mock_post
+
+        # Default timeout
+        await generate_hedged_text("test prompt")
+        assert MockClient.call_args[1]["timeout"].read == 8.0
+
+        # Custom timeout
+        await generate_hedged_text("test prompt", timeout=25.0)
+        assert MockClient.call_args[1]["timeout"].read == 25.0
