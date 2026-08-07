@@ -244,7 +244,7 @@ class ReportGenerator:
         # 0.5 Generate AI Summary
         ai_summary = None
         if scan_metadata:
-            ai_summary = await generate_hedged_text(build_impression_prompt(scan_metadata))
+            ai_summary = await generate_hedged_text(build_impression_prompt(scan_metadata), timeout=25.0)
 
         # 1. Generate unique report ID and determine storage path
         import uuid

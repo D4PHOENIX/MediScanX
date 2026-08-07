@@ -16,12 +16,12 @@ from app.core.config import gateway_config
 logger = logging.getLogger(__name__)
 
 
-async def generate_hedged_text(prompt: str) -> Optional[str]:
+async def generate_hedged_text(prompt: str, timeout: float = 8.0) -> Optional[str]:
     """Generates a short text completion from the configured LLM.
 
     Issues a POST request to the Gemini REST API using the model and API key
     from the gateway configuration. Designed for sub-second responses; enforces
-    a strict 8.0-second timeout.
+    a strict timeout (default 8.0 seconds).
 
     This function never raises an exception. Any failure (timeout, network error,
     non-200 status, missing credentials, malformed JSON, empty response) is caught,
@@ -29,6 +29,7 @@ async def generate_hedged_text(prompt: str) -> Optional[str]:
 
     Args:
         prompt: The fully constructed prompt string.
+        timeout: Float timeout in seconds for the HTTP request.
 
     Returns:
         The generated text string, or None if generation failed or produced no output.
@@ -58,8 +59,8 @@ async def generate_hedged_text(prompt: str) -> Optional[str]:
     try:
         # Create a transient client. In a high-throughput scenario, reusing the app's
         # global http_client would be preferable, but creating one here isolates it
-        # and ensures the 8.0s timeout applies cleanly to this single-shot call.
-        async with AsyncClient(timeout=Timeout(8.0)) as client:
+        # and ensures the timeout applies cleanly to this single-shot call.
+        async with AsyncClient(timeout=Timeout(timeout)) as client:
             resp = await client.post(url, headers=headers, json=payload)
             resp.raise_for_status()
             
