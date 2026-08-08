@@ -109,3 +109,13 @@ The MediScanX monorepo employs a stringent, automated GitHub Actions pipeline ac
     - Mocked `pytest` suites to validate domain logic without external IO overhead.
     - Multi-stage Docker build dry-runs to ensure containerization integrity before merging.
 - **Dependency Caching**: Workflows utilize `astral-sh/setup-uv` with Docker BuildKit cache mounts to optimize pipeline execution times.
+
+## Running tests
+
+Each service has its own test suite. From the repository root you can run the gateway tests with `uv`:
+
+```bash
+cd backend/gateway_backend && uv run pytest -q
+```
+
+Service-specific tests live under `backend/*/tests` and are exercised by the service CI workflows.
