@@ -1,28 +1,34 @@
-# mediscanx
+# Frontend (Flutter client)
 
-A new Flutter project.
+The `frontend/` directory contains the Flutter client used by MediScanX. The primary app entrypoint is `lib/main.dart` and on-device models and assets live under `assets/` (and `mobile_app/assets/` for the mobile-targeted app).
 
-## Getting Started
+## Environment
 
-This project is a starting point for a Flutter application.
+Create a local `.env` from the example and populate the required values:
 
-A few resources to get you started if this is your first Flutter project:
+```bash
+cp .env.example .env
+# set SUPABASE_URL, SUPABASE_ANON_KEY, POWERSYNC_URL, API_BASE_URL
+```
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+`.env` is gitignored and must not be committed.
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## Local development
 
-## Environment Setup
+Install dependencies and run on a connected device or emulator:
 
-1. Copy `.env.example` to `.env`.
-2. Fill required values:
-   - `SUPABASE_URL`
-   - `SUPABASE_ANON_KEY`
-   - `POWERSYNC_URL`
-   - `API_BASE_URL` (optional override)
+```bash
+flutter pub get
+flutter run -d <device-id>
+```
 
-`.env` is ignored by git and must never be committed.
+To build a release APK (Android):
 
+```bash
+flutter build apk --release
+```
+
+Notes:
+
+- Place any on-device model files (TFLite) in the assets folder expected by the app (see `assets/models/`).
+- The app expects the backend gateway at `API_BASE_URL` (set via environment).
