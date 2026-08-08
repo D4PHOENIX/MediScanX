@@ -1,0 +1,97 @@
+name: mediscanx_mobile
+description: >
+  A telemedicine app for scanning ECG, X-rays, and Skin Lesions 
+  with AI diagnostics, offline-first architecture, and TFLite integration.
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  freezed_annotation: ^2.4.1
+  json_annotation: ^4.8.1
+  flutter:
+    sdk: flutter
+
+  # UI & Design
+  cupertino_icons: ^1.0.2
+  google_fonts: ^8.0.2
+
+  # State Management - Riverpod
+  riverpod: ^2.4.0
+  flutter_riverpod: ^2.6.1
+  riverpod_generator: ^2.3.0
+
+  # Database - Drift ORM (SQLite)
+  drift: ^2.16.0
+  sqlite3: ^2.1.8
+  sqlite3_flutter_libs: ^0.5.24
+
+  # File & Path handling (replaces native_storage)
+  path_provider: ^2.1.0
+  path: ^1.8.0
+
+ # Cloud & Sync dependencies
+  supabase_flutter: ^2.16.0
+  powersync: ^1.5.0
+
+  # Navigation
+  go_router: ^10.0.0
+  app_links: ^6.3.2
+
+  # Networking
+  http: ^1.2.0
+  dio: ^5.11.0
+  flutter_dotenv: ^5.2.1
+
+  # Local storage
+  shared_preferences: ^2.2.0
+
+  # Logging & Debugging
+  logger: ^2.0.0
+  image_picker: ^1.2.3
+  drift_sqlite_async: ^0.2.6
+  tflite_flutter: ^0.12.1
+  image: ^4.9.1
+  connectivity_plus: ^7.1.1
+  flutter_client_sse: ^2.0.3
+  uuid: ^4.5.3
+  http_parser: ^4.1.2
+  flutter_markdown: ^0.7.7+1
+  fl_chart: ^1.2.0
+  qr_flutter: ^4.1.0
+  gal: ^2.3.3
+  url_launcher: ^6.3.2
+  open_filex: ^4.7.0
+  intl: ^0.20.3
+
+dev_dependencies:
+  freezed: ^2.4.7
+  json_serializable: ^6.7.1
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^2.0.0
+
+  # Code Generation
+  riverpod_generator: ^2.3.0
+  build_runner: ^2.4.0
+  drift_dev: ^2.14.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - .env
+    - assets/images/lungs_watermark.png
+    - assets/images/logo_full.png
+    - assets/images/logo_icon.png
+    - assets/models/cxr_model/cxr_model.tflite
+    - assets/models/skin_model/skin_model.tflite
+
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "assets/images/logo_icon.png" # Use the icon-only version here
+  remove_alpha_ios: true
