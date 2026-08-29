@@ -205,8 +205,18 @@ async def ecg_predict(
                 content_type=file.content_type or "application/octet-stream",
             )
         except RuntimeError as exc:
-            import logging
-            logging.getLogger(__name__).error("Storage upload failed: %s", exc)
+            logger.error("Storage upload failed: %s", exc)
+            if uploaded_overlay_paths:
+                try:
+                    await StorageService.delete_scan_objects(
+                        supabase_client=request.app.state.supabase_client,
+                        bucket=gateway_config.supabase_storage_bucket,
+                        user_id=final_user_id,
+                        object_paths=uploaded_overlay_paths,
+                    )
+                except Exception as cleanup_exc:
+                    logger.warning("Orphaned overlay objects remaining after raw upload failure: %s (cleanup error: %s)", uploaded_overlay_paths, cleanup_exc)
+            raise HTTPException(status_code=503, detail="Raw image upload failed.") from exc
 
         # Step 3: Derive severity
         confidence: float = float(ml_result.get("confidence", 0.0))
@@ -237,8 +247,7 @@ async def ecg_predict(
             )
 
         except Exception as exc:
-            import logging
-            logging.getLogger(__name__).error("Failed to persist scan result: %s", exc)
+            logger.error("Failed to persist scan result: %s", exc)
 
             if uploaded_overlay_paths:
                 try:
@@ -249,7 +258,7 @@ async def ecg_predict(
                         object_paths=uploaded_overlay_paths,
                     )
                 except Exception as cleanup_exc:
-                    logging.getLogger(__name__).warning(
+                    logger.warning(
                         "Orphaned ecg overlay objects remaining after persistence failure: %s "
                         "(cleanup error: %s)",
                         uploaded_overlay_paths,

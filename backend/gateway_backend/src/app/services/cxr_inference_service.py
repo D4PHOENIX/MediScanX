@@ -161,8 +161,19 @@ class CXRInferenceService:
                     content_type=content_type,
                 )
             except RuntimeError as exc:
-                import logging
-                logging.getLogger(__name__).error("Storage upload failed: %s", exc)
+                logger.error("Storage upload failed: %s", exc)
+                if uploaded_overlay_paths:
+                    try:
+                        await StorageService.delete_scan_objects(
+                            supabase_client=supabase_client,
+                            bucket=gateway_config.supabase_storage_bucket,
+                            user_id=final_user_id,
+                            object_paths=uploaded_overlay_paths,
+                        )
+                    except Exception as cleanup_exc:
+                        logger.warning("Orphaned overlay objects remaining after raw upload failure: %s (cleanup error: %s)", uploaded_overlay_paths, cleanup_exc)
+                from fastapi import HTTPException
+                raise HTTPException(status_code=503, detail="Raw image upload failed.") from exc
 
             # Step 3: Derive severity from confidence
             top = ml_result.get("top_findings") or []
@@ -198,8 +209,7 @@ class CXRInferenceService:
                     xai_status=xai_status,
                 )
             except Exception as exc:
-                import logging
-                logging.getLogger(__name__).error("Failed to persist scan result: %s", exc)
+                logger.error("Failed to persist scan result: %s", exc)
 
                 if uploaded_overlay_paths:
                     try:
@@ -210,7 +220,7 @@ class CXRInferenceService:
                             object_paths=uploaded_overlay_paths,
                         )
                     except Exception as cleanup_exc:
-                        logging.getLogger(__name__).warning("Orphaned overlay objects remaining after persistence failure: %s (cleanup error: %s)", uploaded_overlay_paths, cleanup_exc)
+                        logger.warning("Orphaned overlay objects remaining after persistence failure: %s (cleanup error: %s)", uploaded_overlay_paths, cleanup_exc)
 
                 raise
 

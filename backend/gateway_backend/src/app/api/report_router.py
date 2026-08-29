@@ -186,6 +186,14 @@ async def list_reports(
     row filtering.  The service-role client is never consulted for this query.
     A missing or empty result from RLS is surfaced as an empty list, not as an
     error, because zero owned reports is a valid state.
+
+    Orphan visibility
+    -----------------
+    Each item carries ``surviving_scan_count``: the number of the report's
+    recorded source scan UUIDs that still exist in ``scan_results``.  When
+    ``surviving_scan_count < scan_count``, one or more source scans have been
+    deleted.  The client should surface this discrepancy rather than silently
+    rendering a gap.  The ``scan_ids`` array on the report row is never mutated.
     """
     # Caller JWT is in scope — use the request-scoped client.
     user_client = await make_user_client(request)
@@ -207,17 +215,56 @@ async def list_reports(
     )
     rows = data_result.data or []
 
+    # --- Orphan visibility: find surviving source scans in one query ----------
+    # Collect every scan UUID referenced by the current page of reports.
+    # A single ANY($1) query then tells us which UUIDs still exist in
+    # scan_results.  This avoids N+1 queries and does not require a new table.
+    all_scan_uuids: list = []
+    for row in rows:
+        sids = row.get("scan_ids") or []
+        all_scan_uuids.extend(sids)
+
+    existing_scan_ids: set[str] = set()
+    db_pool = request.app.state.db_pool
+    if all_scan_uuids and db_pool:
+        import logging as _log
+        try:
+            async with db_pool.acquire() as conn:
+                surviving = await conn.fetch(
+                    "SELECT DISTINCT scan_id FROM scan_results "
+                    "WHERE scan_id = ANY($1::uuid[]) "
+                    "AND ("
+                    "  user_id = $2::uuid "
+                    "  OR EXISTS ("
+                    "    SELECT 1 FROM care_relationships cr "
+                    "    WHERE cr.doctor_id = $2::uuid "
+                    "      AND cr.patient_id = scan_results.user_id "
+                    "      AND cr.status = 'active' "
+                    "      AND (cr.expires_at IS NULL OR cr.expires_at > now())"
+                    "  )"
+                    ")",
+                    all_scan_uuids,
+                    current_user,
+                )
+            existing_scan_ids = {str(r["scan_id"]) for r in surviving}
+        except Exception as exc:
+            _log.getLogger(__name__).warning(
+                "Could not compute surviving_scan_count for report list: %s", exc
+            )
+            # Non-fatal: surviving_scan_count will be None for all items.
+    # -------------------------------------------------------------------------
+
     items = []
     # Storage URL signing uses the service-role client: this is a storage
     # control-plane operation against the medical_reports bucket, not a
     # reports table read.
     sb_client = request.app.state.supabase_client
     bucket = sb_client.storage.from_("medical_reports")
-    
+
     for row in rows:
         report_id = str(row["report_id"])
         user_id = str(row["user_id"])
-        
+
         patient_ref = None
         if user_id != current_user:
             patient_ref = f"PT-{user_id[:6].upper()}"
@@ -228,15 +275,24 @@ async def list_reports(
         scan_ids = row.get("scan_ids")
         # Match PostgreSQL array_length semantics: returns None if the array is empty or null
         scan_count = len(scan_ids) if scan_ids else None
+
+        surviving_scan_count = None
+        if scan_ids and db_pool:
+            surviving_scan_count = sum(
+                1 for sid in scan_ids if str(sid) in existing_scan_ids
+            )
+
         items.append(ReportItem(
             report_id=report_id,
             created_at=row["created_at"],
             scan_count=scan_count,
             url=signed_url,
-            patient_ref=patient_ref
+            patient_ref=patient_ref,
+            surviving_scan_count=surviving_scan_count,
         ))
 
     return ReportListResponse(total_count=total_count, items=items)
+
 
 
 @router.delete("/{report_id}", status_code=204)

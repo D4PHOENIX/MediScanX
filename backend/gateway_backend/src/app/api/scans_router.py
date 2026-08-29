@@ -1,18 +1,24 @@
-from app.utils.validation_utils import parse_uuid
-"""History and trends endpoints for longitudinal scan tracking."""
+"""History, trends, and deletion endpoints for longitudinal scan tracking."""
 
+import logging
 import uuid
 from typing import Optional
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
+from app.core.config import gateway_config
 from app.core.security import get_current_user
 from app.models.domain import ScanModality
 from app.models.schemas import ExplainabilityInfo, HistoryResponse, HistoryScanItem, TrendResponse, TrendTransition, ClaimRequest, ClaimResponse  # noqa: F401
-from app.utils.labels import _ABNORMAL_LABELS, _NORMAL_LABELS  # noqa: F401
-from app.utils.xai_utils import build_xai_authenticated_url  # noqa: F401
 from app.services.scans_service import ScansService
+from app.services.storage_service import StorageService
+from app.utils.labels import _ABNORMAL_LABELS, _NORMAL_LABELS  # noqa: F401
+from app.utils.validation_utils import parse_uuid
+from app.utils.xai_utils import build_xai_authenticated_url  # noqa: F401
+
+logger: logging.Logger = logging.getLogger(__name__)
+
 
 router: APIRouter = APIRouter(prefix="", tags=["scans"])
 
@@ -195,3 +201,106 @@ async def get_triage_endpoint(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Database query failed"
         ) from e
+
+
+@router.delete(
+    "/{scan_id}",
+    status_code=status.HTTP_200_OK,
+    summary="Delete a scan owned by the authenticated caller.",
+)
+async def delete_scan(
+    scan_id: str,
+    request: Request,
+    user_id: str = Depends(get_current_user),
+) -> dict:
+    """Delete a scan row and its associated storage objects.
+
+    Ordering guarantee: ownership verification precedes storage removal, which
+    precedes row deletion. An orphaned storage object with no row pointing at it
+    is unreclaimable (nothing knows it exists). A row pointing at missing objects
+    is visible and diagnosable. Storage failure therefore leaves the row intact
+    and returns 5xx so the caller can retry.
+
+    Args:
+        scan_id: Path parameter UUID of the scan to delete.
+        request: FastAPI request context (carries db_pool and supabase_client).
+        user_id: JWT-derived caller identity injected by get_current_user.
+
+    Returns:
+        dict: ``{"deleted": scan_id}`` on success.
+
+    Raises:
+        HTTPException 422: Malformed scan_id UUID (via parse_uuid).
+        HTTPException 404: Scan absent or not owned by the caller. 404 is
+            returned for both cases; 403 would confirm the scan_id exists.
+        HTTPException 500: Storage removal failed; the row was NOT deleted.
+        HTTPException 503: Database pool unavailable.
+    """
+    scan_uuid = parse_uuid(scan_id, "scan_id")
+    user_uuid = parse_uuid(user_id, "user_id")
+
+    db_pool: asyncpg.Pool | None = request.app.state.db_pool
+    if not db_pool:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database connection pool unavailable.",
+        )
+
+    # Step 1 — Verify ownership before any destructive work.
+    # An absent row and a row owned by another user both return 404.
+    # Returning 403 for the latter would confirm that the scan_id exists.
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT storage_path, xai_path FROM scan_results "
+            "WHERE scan_id = $1 AND user_id = $2",
+            scan_uuid,
+            user_uuid,
+        )
+
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Scan not found.",
+        )
+
+    storage_path: Optional[str] = row["storage_path"]
+    xai_path: Optional[str] = row["xai_path"]
+
+    # Step 2 — Remove storage objects before deleting the row.
+    # NULL paths are normal: storage_path is NULL when the raw upload failed
+    # and cxr_inference_service swallowed the error (known production state).
+    # xai_path is NULL when xai_status != 'generated'. Skip NULLs silently.
+    # Both paths NULL means call storage zero times, then proceed to step 3.
+    # If storage reports the object already absent, delete_scan_objects treats
+    # that as success (it does not inspect remove()'s return value).
+    object_paths = [p for p in [storage_path, xai_path] if p is not None]
+
+    if object_paths:
+        try:
+            await StorageService.delete_scan_objects(
+                supabase_client=request.app.state.supabase_client,
+                bucket=gateway_config.supabase_storage_bucket,
+                user_id=user_id,
+                object_paths=object_paths,
+            )
+        except Exception as exc:
+            logger.error(
+                "Storage removal failed for scan_id=%s paths=%s: %s",
+                scan_id,
+                object_paths,
+                exc,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Storage removal failed; scan row was not deleted.",
+            ) from exc
+
+    # Step 3 — Delete the row only after storage objects are confirmed gone.
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM scan_results WHERE scan_id = $1 AND user_id = $2",
+            scan_uuid,
+            user_uuid,
+        )
+
+    return {"deleted": scan_id}
