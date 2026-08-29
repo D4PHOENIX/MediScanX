@@ -183,3 +183,89 @@ async def get_doctor(
             raise HTTPException(status_code=404, detail="Doctor not found")
         return data[0]
     return data
+
+
+from pydantic import BaseModel, Field
+
+from pydantic import BaseModel, Field
+from typing import Optional
+
+class CareRelationshipItem(BaseModel):
+    id: str
+    status: str
+    is_active: bool
+    created_at: str
+    activated_at: Optional[str] = None
+    expires_at: Optional[str] = None
+    doctor_full_name: Optional[str] = None
+    doctor_specialization: Optional[str] = None
+    doctor_current_hospital: Optional[str] = None
+
+class RevokeCareRequest(BaseModel):
+    relationship_id: str = Field(..., pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+@router.get("/care-relationships", response_model=List[CareRelationshipItem])
+async def list_care_relationships(
+    request: Request,
+    token: str = Depends(get_token),
+    user_id: str = Depends(get_current_user),
+) -> List[CareRelationshipItem]:
+    """List all active and pending care relationships for the caller."""
+    url = f"{SUPABASE_URL}/rest/v1/rpc/list_care_relationships"
+    headers = {
+        "apikey": SUPABASE_PUBLISHABLE_KEY,
+        "Authorization": f"Bearer {token}",
+    }
+    client: httpx.AsyncClient = request.app.state.http_client
+    try:
+        resp = await client.post(url, headers=headers, timeout=10.0)
+        resp.raise_for_status()
+        data = resp.json()
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 400:
+            try:
+                err_data = exc.response.json()
+            except ValueError:
+                err_data = {}
+            if err_data.get("message") == "Not authenticated":
+                raise HTTPException(status_code=401, detail="Not authenticated")
+                pass
+        raise HTTPException(
+            status_code=exc.response.status_code,
+            detail="Supabase request failed",
+        )
+    return [CareRelationshipItem(**item) for item in data] if isinstance(data, list) else []
+
+@router.post("/care-relationships/revoke")
+async def revoke_care_relationship(
+    request: Request,
+    payload: RevokeCareRequest,
+    token: str = Depends(get_token),
+    user_id: str = Depends(get_current_user),
+) -> Dict[str, str]:
+    """Revoke an active or pending care relationship."""
+    url = f"{SUPABASE_URL}/rest/v1/rpc/revoke_care"
+    headers = {
+        "apikey": SUPABASE_PUBLISHABLE_KEY,
+        "Authorization": f"Bearer {token}",
+    }
+    client: httpx.AsyncClient = request.app.state.http_client
+    try:
+        resp = await client.post(url, headers=headers, json={"p_id": payload.relationship_id}, timeout=10.0)
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 400:
+            try:
+                err_data = exc.response.json()
+            except ValueError:
+                err_data = {}
+            if err_data.get("message") == "no live relationship":
+                raise HTTPException(status_code=404, detail="no live relationship")
+            if err_data.get("message") == "Not authenticated":
+                raise HTTPException(status_code=401, detail="Not authenticated")
+                pass
+        raise HTTPException(
+            status_code=exc.response.status_code,
+            detail="Supabase request failed",
+        )
+    return {"status": "revoked"}
