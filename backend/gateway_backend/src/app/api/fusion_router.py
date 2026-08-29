@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from app.utils.validation_utils import parse_uuid
 from typing import Any, Dict, List, Optional
 
 import asyncpg
@@ -204,20 +205,14 @@ async def fuse(
             detail="Database connection pool unavailable.",
         )
 
-    user_uuid = uuid.UUID(user_id)
+    user_uuid = parse_uuid(user_id, 'subject claim')
 
     # --- Validate selected_scan_ids when provided ---
     scan_uuids: Optional[List[uuid.UUID]] = None
     if body.selected_scan_ids is not None:
         validated: List[uuid.UUID] = []
         for raw in body.selected_scan_ids:
-            try:
-                validated.append(uuid.UUID(raw))
-            except ValueError:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=f"Invalid UUID in selected_scan_ids: '{raw}'",
-                )
+            validated.append(parse_uuid(raw, 'selected_scan_ids'))
         scan_uuids = validated
 
     try:

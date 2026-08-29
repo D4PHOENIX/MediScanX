@@ -1,4 +1,5 @@
 import uuid
+from app.utils.validation_utils import parse_uuid
 from typing import Optional, Any
 import asyncpg
 
@@ -237,7 +238,7 @@ class ScansService:
         # Always prepare the report URL to return, even if access is not granted.
         report_path = f"{patient_id}_report.pdf"
         try:
-            signed_resp = await supabase_client.storage.from_("medical_reports").create_signed_url(report_path, 60 * 60 * 24)
+            signed_resp = await supabase_client.storage.from_("medical_reports").create_signed_url(report_path, gateway_config.signed_url_ttl_seconds)
             report_url = signed_resp.get("signedURL") or signed_resp.get("signedUrl")
             if not report_url:
                 raise ValueError("Could not get signed URL.")
@@ -258,7 +259,7 @@ class ScansService:
             # Check if caller is a doctor
             is_doctor = await conn.fetchval(
                 "SELECT EXISTS(SELECT 1 FROM doctor_profiles WHERE user_id = $1)",
-                uuid.UUID(caller_id)
+                parse_uuid(caller_id, 'caller_id')
             )
             if not is_doctor:
                 return ClaimResponse(
@@ -272,13 +273,13 @@ class ScansService:
             # Check existing care relationship
             row = await conn.fetchrow(
                 "SELECT status, ended_at FROM care_relationships WHERE doctor_id = $1 AND patient_id = $2",
-                uuid.UUID(caller_id),
-                uuid.UUID(patient_id)
+                parse_uuid(caller_id, 'caller_id'),
+                parse_uuid(patient_id, 'patient_id')
             )
 
             access_granted = False
             reason = None
-            expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+            expires_at = datetime.now(timezone.utc) + timedelta(days=gateway_config.care_relationship_ttl_days)
 
             if row:
                 status = row["status"]
@@ -290,13 +291,13 @@ class ScansService:
                 elif status == "active":
                     await conn.execute(
                         "UPDATE care_relationships SET expires_at = $1 WHERE doctor_id = $2 AND patient_id = $3",
-                        expires_at, uuid.UUID(caller_id), uuid.UUID(patient_id)
+                        expires_at, parse_uuid(caller_id, 'caller_id'), parse_uuid(patient_id, 'patient_id')
                     )
                     access_granted = True
                 elif status == "pending":
                     await conn.execute(
                         "UPDATE care_relationships SET status = 'active', activated_at = now(), expires_at = $1 WHERE doctor_id = $2 AND patient_id = $3",
-                        expires_at, uuid.UUID(caller_id), uuid.UUID(patient_id)
+                        expires_at, parse_uuid(caller_id, 'caller_id'), parse_uuid(patient_id, 'patient_id')
                     )
                     access_granted = True
                 elif status == "revoked":
@@ -312,7 +313,7 @@ class ScansService:
                     INSERT INTO care_relationships (patient_id, doctor_id, status, initiated_by, note, created_at, activated_at, expires_at)
                     VALUES ($1, $2, 'active', $3, 'QR claim', now(), now(), $4)
                     """,
-                    uuid.UUID(patient_id), uuid.UUID(caller_id), uuid.UUID(caller_id), expires_at
+                    parse_uuid(patient_id, 'patient_id'), parse_uuid(caller_id, 'caller_id'), parse_uuid(caller_id, 'caller_id'), expires_at
                 )
                 access_granted = True
 
@@ -348,10 +349,11 @@ class ScansService:
         async with db_pool.acquire() as conn:
             is_doctor = await conn.fetchval(
                 "SELECT EXISTS(SELECT 1 FROM doctor_profiles WHERE user_id = $1)",
-                uuid.UUID(caller_id)
+                parse_uuid(caller_id, 'caller_id')
             )
             if not is_doctor:
-                return HistoryResponse(total_count=0, items=[])
+                from fastapi import HTTPException
+                raise HTTPException(status_code=403, detail="Caller is not a registered doctor")
 
             query = """
                 SELECT 
@@ -371,10 +373,10 @@ class ScansService:
             """
 
             count_query = f"SELECT COUNT(*) FROM ({query}) AS sub"
-            total_count = await conn.fetchval(count_query, uuid.UUID(caller_id))
+            total_count = await conn.fetchval(count_query, parse_uuid(caller_id, 'caller_id'))
 
             data_query = query + " ORDER BY s.scan_status DESC, s.scan_date DESC LIMIT $2 OFFSET $3"
-            rows = await conn.fetch(data_query, uuid.UUID(caller_id), limit, offset)
+            rows = await conn.fetch(data_query, parse_uuid(caller_id, 'caller_id'), limit, offset)
 
             items = []
             for row in rows:

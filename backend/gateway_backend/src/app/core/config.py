@@ -36,6 +36,8 @@ class GatewayConfig(BaseSettings):
     supabase_secret_key: str
     dev_mode: bool = False
     dev_token_secret: str
+    care_relationship_ttl_days: int = Field(default=7, description="Number of days a newly claimed care relationship remains active before expiring.")
+    signed_url_ttl_seconds: int = Field(default=900, description="Time-to-live for signed URLs in seconds (15 minutes).")
     report_token_secret: str
     database_url: str | None = None
     claim_base_url: str = Field(default_factory=lambda: os.getenv("CLAIM_BASE_URL", "https://mediscanx.app/claim"))

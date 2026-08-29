@@ -24,3 +24,24 @@ def _validate_uuid(value: str, field_name: str) -> str:
             detail=f"'{field_name}' must be a valid UUID. Received: '{value}'",
         )
     return value
+
+def parse_uuid(value: str, field_name: str = "ID") -> uuid_mod.UUID:
+    """Parses a string into a UUID object, raising 422 if malformed.
+
+    Args:
+        value: The string to parse.
+        field_name: Contextual name of the field for the error message.
+
+    Returns:
+        uuid.UUID: The parsed UUID object.
+
+    Raises:
+        HTTPException: 422 Unprocessable Entity if malformed.
+    """
+    try:
+        return uuid_mod.UUID(value)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Malformed {field_name}: '{value}'",
+        )
