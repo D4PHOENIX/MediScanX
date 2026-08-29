@@ -306,6 +306,14 @@ class ReportItem(BaseModel):
     scan_count: int
     url: str | None
     patient_ref: Optional[str] = None
+    surviving_scan_count: Optional[int] = Field(
+        None,
+        description=(
+            "Number of the report's source scans that still exist in scan_results. "
+            "When less than scan_count, one or more source scans have been deleted. "
+            "None when the database pool is unavailable or the report has no scan_ids."
+        ),
+    )
 
 
 class ReportListResponse(BaseModel):
