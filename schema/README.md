@@ -19,7 +19,7 @@ Requires a Supabase project. The script depends on `auth.users` and the
 `storage` schema, neither of which exists in plain PostgreSQL.
 
 ```bash
-psql "$DATABASE_URL" -f schema/0001_baseline.sql
+psql "$DATABASE_URL" -f schema/0001_baseline_schema.sql
 ```
 
 Or paste it into the Supabase SQL editor.
@@ -35,27 +35,27 @@ that call them.
 
 ## What it contains
 
-| | |
-|---|---|
-| **Tables** | 11 |
-| **Policies** | 15 row-level security policies across `public` and `storage` |
-| **Functions** | 8 |
-| **Triggers** | 2 |
-| **Buckets** | 2, both private |
-| **Publication** | `powersync`, over 5 tables |
+|                 |                                                              |
+| --------------- | ------------------------------------------------------------ |
+| **Tables**      | 11                                                           |
+| **Policies**    | 15 row-level security policies across `public` and `storage` |
+| **Functions**   | 8                                                            |
+| **Triggers**    | 2                                                            |
+| **Buckets**     | 2, both private                                              |
+| **Publication** | `powersync`, over 5 tables                                   |
 
 ### Tables
 
-| Table | Purpose |
-|---|---|
-| `patient_records` | Patient profile, keyed on `auth.users(id)` |
-| `doctor_profiles` | Clinician profile — **membership here is the definition of "is a doctor"** |
-| `care_relationships` | Consent records granting a doctor access to a patient |
-| `scan_results` | One row per diagnostic scan, across all three modalities |
-| `reports` | One row per generated PDF report |
-| `chat_messages` | Conversational history with the medical assistant |
-| `rag_corpus` | Medical literature backing retrieval-augmented generation |
-| `checkpoints`, `checkpoint_blobs`, `checkpoint_writes`, `checkpoint_migrations` | LangGraph agent state — structure defined by the library, do not alter |
+| Table                                                                           | Purpose                                                                    |
+| ------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `patient_records`                                                               | Patient profile, keyed on `auth.users(id)`                                 |
+| `doctor_profiles`                                                               | Clinician profile — **membership here is the definition of "is a doctor"** |
+| `care_relationships`                                                            | Consent records granting a doctor access to a patient                      |
+| `scan_results`                                                                  | One row per diagnostic scan, across all three modalities                   |
+| `reports`                                                                       | One row per generated PDF report                                           |
+| `chat_messages`                                                                 | Conversational history with the medical assistant                          |
+| `rag_corpus`                                                                    | Medical literature backing retrieval-augmented generation                  |
+| `checkpoints`, `checkpoint_blobs`, `checkpoint_writes`, `checkpoint_migrations` | LangGraph agent state — structure defined by the library, do not alter     |
 
 ---
 
@@ -81,12 +81,12 @@ grant nothing the application needs while allowing a client to forge rows.
 the constraint gives the complete legal vocabulary without searching the
 codebase:
 
-| Column | Values |
-|---|---|
-| `scan_results.modality` | `cxr` · `ecg` · `skin` |
-| `scan_results.inference_source` | `cloud` · `edge` |
-| `scan_results.xai_status` | `none` · `generated` · `skipped_edge` · `failed` |
-| `care_relationships.status` | `pending` · `active` · `declined` · `revoked` |
+| Column                          | Values                                           |
+| ------------------------------- | ------------------------------------------------ |
+| `scan_results.modality`         | `cxr` · `ecg` · `skin`                           |
+| `scan_results.inference_source` | `cloud` · `edge`                                 |
+| `scan_results.xai_status`       | `none` · `generated` · `skipped_edge` · `failed` |
+| `care_relationships.status`     | `pending` · `active` · `declined` · `revoked`    |
 
 **Absence is distinguished from failure.** `xai_status` is the clearest case:
 `none`, `skipped_edge` and `failed` describe three different reasons an

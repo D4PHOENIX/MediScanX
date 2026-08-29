@@ -42,8 +42,6 @@ services:
         env_file: .env
         environment:
             # Override DATABASE_URL with the session pooler URL (port 5432).
-            # AsyncPostgresSaver (psycopg3) uses PREPARE internally, which is
-            # incompatible with transaction pooler (port 6543).
             - DATABASE_URL=${AGENT_DATABASE_URL}
         dns:
             - 8.8.8.8

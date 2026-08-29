@@ -24,7 +24,7 @@ def test_generate_report_request_schema():
 
 @pytest.mark.asyncio
 async def test_generate_report_own_scans_succeeds(auth_headers):
-    # Mock supabase
+    # Mock supabase (service-role client for storage)
     mock_supabase_client = MagicMock()
     mock_bucket = AsyncMock()
     mock_supabase_client.storage.from_.return_value = mock_bucket
@@ -32,7 +32,7 @@ async def test_generate_report_own_scans_succeeds(auth_headers):
     mock_bucket.download.return_value = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\xdacd\xf8\xcfP\x0f\x00\x03\x86\x01\x80Z4}k\x00\x00\x00\x00IEND\xaeB`\x82'
     app.state.supabase_client = mock_supabase_client
 
-    # Mock asyncpg
+    # Mock asyncpg (for fetch_scan_metadata which still uses asyncpg)
     mock_conn = AsyncMock()
     # Return realistic scan_results rows
     mock_conn.fetch.return_value = [
@@ -52,8 +52,15 @@ async def test_generate_report_own_scans_succeeds(auth_headers):
     mock_response.status_code = 200
     mock_response.content = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\xdacd\xf8\xcfP\x0f\x00\x03\x86\x01\x80Z4}k\x00\x00\x00\x00IEND\xaeB`\x82'
 
+    # Mock user-scoped client for the INSERT into public.reports
+    mock_user_client = MagicMock()
+    mock_insert_result = MagicMock()
+    mock_insert_result.data = [{"report_id": str(uuid.uuid4())}]
+    mock_user_client.table.return_value.insert.return_value.execute = AsyncMock(return_value=mock_insert_result)
+
     with patch("asyncpg.connect", return_value=mock_conn), \
-         patch("httpx.AsyncClient.get", new_callable=AsyncMock, return_value=mock_response):
+         patch("httpx.AsyncClient.get", new_callable=AsyncMock, return_value=mock_response), \
+         patch("app.api.report_router.make_user_client", new_callable=AsyncMock, return_value=mock_user_client):
         response = client.post(
             "/api/v1/reports/generate",
             json={
@@ -64,6 +71,7 @@ async def test_generate_report_own_scans_succeeds(auth_headers):
         )
         assert response.status_code == 200
         assert response.json()["message"] == "Report generated"
+
 
 
 @pytest.mark.asyncio
@@ -453,7 +461,14 @@ async def test_generate_report_two_distinct_objects(auth_headers):
     mock_conn = AsyncMock()
     mock_conn.fetch.return_value = [{"scan_id": uuid.uuid4(), "modality": "CXR", "ai_diagnosis": "Pneumonia", "confidence": 0.95, "scan_date": datetime.datetime.now(datetime.timezone.utc), "xai_status": "none", "xai_path": None, "storage_path": None}]
 
-    with patch("asyncpg.connect", return_value=mock_conn):
+    # Mock user-scoped client for the INSERT into public.reports
+    mock_user_client = MagicMock()
+    mock_insert_result = MagicMock()
+    mock_insert_result.data = [{"report_id": str(uuid.uuid4())}]
+    mock_user_client.table.return_value.insert.return_value.execute = AsyncMock(return_value=mock_insert_result)
+
+    with patch("asyncpg.connect", return_value=mock_conn), \
+         patch("app.api.report_router.make_user_client", new_callable=AsyncMock, return_value=mock_user_client):
         response1 = client.post("/api/v1/reports/generate", json={"selected_scan_ids": [str(uuid.uuid4())], "patient_id": "test-dev-user"}, headers={"Authorization": "Bearer test-dev-token-secret"})
         response2 = client.post("/api/v1/reports/generate", json={"selected_scan_ids": [str(uuid.uuid4())], "patient_id": "test-dev-user"}, headers={"Authorization": "Bearer test-dev-token-secret"})
         
@@ -468,6 +483,7 @@ async def test_generate_report_two_distinct_objects(auth_headers):
         assert "x-upsert" not in calls[0][1].get("file_options", {})
 
 
+
 @pytest.mark.asyncio
 async def test_get_reports_history(auth_headers):
     mock_supabase_client = MagicMock()
@@ -476,21 +492,31 @@ async def test_get_reports_history(auth_headers):
     mock_bucket.create_signed_url.return_value = {"signedURL": "https://signed.mock/report.pdf"}
     app.state.supabase_client = mock_supabase_client
 
-    mock_conn = AsyncMock()
-    # Mock total count
-    mock_conn.fetchval.return_value = 2
-    # Mock data rows
     report_id1, report_id2 = str(uuid.uuid4()), str(uuid.uuid4())
-    mock_conn.fetch.return_value = [
-        {"report_id": report_id1, "user_id": "test-dev-user", "created_at": datetime.datetime.now(), "scan_count": 2, "storage_path": "path1"},
-        {"report_id": report_id2, "user_id": "other-user-uuid", "created_at": datetime.datetime.now(), "scan_count": 1, "storage_path": "path2"}
+
+    # Build mock user-scoped SDK client simulating what PostgREST+RLS would return.
+    # count query returns APIResponse with count=2
+    mock_count_result = MagicMock()
+    mock_count_result.count = 2
+    mock_count_result.data = []
+    # data query returns APIResponse with 2 rows
+    mock_data_result = MagicMock()
+    mock_data_result.data = [
+        {"report_id": report_id1, "user_id": "test-dev-user", "created_at": datetime.datetime.now().isoformat(), "scan_ids": [str(uuid.uuid4()), str(uuid.uuid4())], "storage_path": "path1"},
+        {"report_id": report_id2, "user_id": "other-user-uuid", "created_at": datetime.datetime.now().isoformat(), "scan_ids": [str(uuid.uuid4())], "storage_path": "path2"},
     ]
+
+    mock_user_client = MagicMock()
+    # Chain for count: .table("reports").select("report_id", count="exact").execute()
+    mock_user_client.table.return_value.select.return_value.execute = AsyncMock(return_value=mock_count_result)
+    # Chain for data: .table("reports").select(...).order(...).range(...).execute()
+    mock_user_client.table.return_value.select.return_value.order.return_value.range.return_value.execute = AsyncMock(return_value=mock_data_result)
 
     from app.core.security import get_current_user
     app.dependency_overrides[get_current_user] = lambda: "test-dev-user"
 
-    with patch("asyncpg.connect", return_value=mock_conn):
-        response = client.get("/api/v1/reports")
+    with patch("app.api.report_router.make_user_client", new_callable=AsyncMock, return_value=mock_user_client):
+        response = client.get("/api/v1/reports", headers={"Authorization": "Bearer test-dev-token-secret"})
         app.dependency_overrides.clear()
         assert response.status_code == 200
         data = response.json()
@@ -503,13 +529,9 @@ async def test_get_reports_history(auth_headers):
         # Verify PT- ref for other patient
         assert data["items"][0]["patient_ref"] is None
         assert data["items"][1]["patient_ref"] == "PT-OTHER-"
-        
-        # Verify limit and offset behave
-        called_query = mock_conn.fetch.call_args[0][0]
-        assert "LIMIT $2 OFFSET $3" in called_query
-        
-        # Verify care relationship expired is explicitly in query
-        assert "expires_at IS NULL OR expires_at > now()" in called_query
+
+
+
 
 
 @pytest.mark.asyncio
@@ -520,22 +542,29 @@ async def test_delete_report_success(auth_headers):
     mock_bucket.remove.return_value = [{"name": "obj", "error": None}]  # simulated success response
     app.state.supabase_client = mock_supabase_client
 
-    mock_conn = AsyncMock()
     report_id = str(uuid.uuid4())
-    # User owns the report
-    mock_conn.fetchrow.return_value = {"user_id": "test-dev-user", "storage_path": "path"}
+
+    # Mock user-scoped SDK client: prefetch returns the owned row; DELETE succeeds.
+    mock_user_client = MagicMock()
+    mock_select_result = MagicMock()
+    mock_select_result.data = [{"storage_path": "path"}]
+    mock_user_client.table.return_value.select.return_value.eq.return_value.execute = AsyncMock(return_value=mock_select_result)
+    mock_delete_result = MagicMock()
+    mock_delete_result.data = []
+    mock_user_client.table.return_value.delete.return_value.eq.return_value.execute = AsyncMock(return_value=mock_delete_result)
 
     from app.core.security import get_current_user
     app.dependency_overrides[get_current_user] = lambda: "test-dev-user"
 
-    with patch("asyncpg.connect", return_value=mock_conn):
-        response = client.delete(f"/api/v1/reports/{report_id}")
+    with patch("app.api.report_router.make_user_client", new_callable=AsyncMock, return_value=mock_user_client):
+        response = client.delete(f"/api/v1/reports/{report_id}", headers={"Authorization": "Bearer test-dev-token-secret"})
         app.dependency_overrides.clear()
         assert response.status_code == 204
         
-        # Object and row both gone
+        # Storage object was removed via the service-role client
         mock_bucket.remove.assert_called_once_with(["path"])
-        mock_conn.execute.assert_called_once_with("DELETE FROM reports WHERE report_id = $1::uuid", report_id)
+        # SDK DELETE was called
+        mock_user_client.table.return_value.delete.return_value.eq.return_value.execute.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -544,28 +573,27 @@ async def test_delete_report_refuse_doctor(auth_headers):
     mock_bucket = AsyncMock()
     app.state.supabase_client = mock_supabase_client
 
-    mock_conn = AsyncMock()
     report_id = str(uuid.uuid4())
-    # The SQL query filters by user_id = current_user, so if caller is not the owner, fetchrow returns None
-    mock_conn.fetchrow.return_value = None
+
+    # Mock user-scoped SDK client: prefetch returns empty (RLS hides the row from non-owner)
+    mock_user_client = MagicMock()
+    mock_select_result = MagicMock()
+    mock_select_result.data = []  # empty — RLS denied visibility
+    mock_user_client.table.return_value.select.return_value.eq.return_value.execute = AsyncMock(return_value=mock_select_result)
 
     from app.core.security import get_current_user
     app.dependency_overrides[get_current_user] = lambda: "test-dev-user"
 
-    with patch("asyncpg.connect", return_value=mock_conn):
-        response = client.delete(f"/api/v1/reports/{report_id}")
+    with patch("app.api.report_router.make_user_client", new_callable=AsyncMock, return_value=mock_user_client):
+        response = client.delete(f"/api/v1/reports/{report_id}", headers={"Authorization": "Bearer test-dev-token-secret"})
         app.dependency_overrides.clear()
         # Even if doctor has care access, they are refused (404 indistinguishable from stranger)
         assert response.status_code == 404
         
         mock_bucket.remove.assert_not_called()
-        mock_conn.execute.assert_not_called()
+        # SDK DELETE must not have been called
+        assert not mock_user_client.table.return_value.delete.called
 
-        called_query = mock_conn.fetchrow.call_args[0][0]
-        called_args = mock_conn.fetchrow.call_args[0][1:]
-        assert "user_id = $2::uuid" in called_query
-        assert called_args == (report_id, "test-dev-user")
-        
 
 
 @pytest.mark.asyncio
@@ -575,61 +603,66 @@ async def test_delete_report_storage_fail_leaves_row(auth_headers):
     mock_supabase_client.storage.from_.return_value = mock_bucket
     app.state.supabase_client = mock_supabase_client
 
-    mock_conn = AsyncMock()
     report_id = str(uuid.uuid4())
-    mock_conn.fetchrow.return_value = {"user_id": "test-dev-user", "storage_path": "path"}
+
+    # Mock user-scoped SDK client: prefetch always returns the owned row
+    mock_user_client = MagicMock()
+    mock_select_result = MagicMock()
+    mock_select_result.data = [{"storage_path": "path"}]
+    mock_user_client.table.return_value.select.return_value.eq.return_value.execute = AsyncMock(return_value=mock_select_result)
+    mock_delete_result = MagicMock()
+    mock_delete_result.data = []
+    mock_user_client.table.return_value.delete.return_value.eq.return_value.execute = AsyncMock(return_value=mock_delete_result)
 
     from app.core.security import get_current_user
     app.dependency_overrides[get_current_user] = lambda: "test-dev-user"
 
-    with patch("asyncpg.connect", return_value=mock_conn):
-        # Case 1: Empty list (object not found)
+    with patch("app.api.report_router.make_user_client", new_callable=AsyncMock, return_value=mock_user_client):
+        # Case 1: Empty list (object not found — still proceeds to DB delete)
         mock_bucket.remove.return_value = []
-        response = client.delete(f"/api/v1/reports/{report_id}")
+        response = client.delete(f"/api/v1/reports/{report_id}", headers={"Authorization": "Bearer test-dev-token-secret"})
         assert response.status_code == 204
-        mock_conn.execute.assert_called_once_with("DELETE FROM reports WHERE report_id = $1::uuid", report_id)
-        mock_conn.execute.reset_mock()
+        mock_user_client.table.return_value.delete.return_value.eq.return_value.execute.assert_awaited()
+        mock_user_client.table.return_value.delete.return_value.eq.return_value.execute.reset_mock()
 
-        # Case 2: List with error dict
+        # Case 2: List with error dict — storage failed, DB delete must not run
         mock_bucket.remove.return_value = [{"error": "Some storage error"}]
-        response = client.delete(f"/api/v1/reports/{report_id}")
+        response = client.delete(f"/api/v1/reports/{report_id}", headers={"Authorization": "Bearer test-dev-token-secret"})
         assert response.status_code == 500
-        mock_conn.execute.assert_not_called()
+        mock_user_client.table.return_value.delete.return_value.eq.return_value.execute.assert_not_awaited()
 
         # Case 3: Exception raised by remove
         mock_bucket.remove.side_effect = Exception("Network error")
-        response = client.delete(f"/api/v1/reports/{report_id}")
+        response = client.delete(f"/api/v1/reports/{report_id}", headers={"Authorization": "Bearer test-dev-token-secret"})
         assert response.status_code == 500
-        mock_conn.execute.assert_not_called()
+        mock_user_client.table.return_value.delete.return_value.eq.return_value.execute.assert_not_awaited()
 
         app.dependency_overrides.clear()
 
 
 @pytest.mark.asyncio
 async def test_delete_report_not_found_matches_unrelated(auth_headers):
-    mock_conn = AsyncMock()
-    
+    # Mock user-scoped SDK client: empty prefetch for both cases (not found / wrong owner)
+    mock_user_client = MagicMock()
+    mock_select_result = MagicMock()
+    mock_select_result.data = []
+    mock_user_client.table.return_value.select.return_value.eq.return_value.execute = AsyncMock(return_value=mock_select_result)
+
     from app.core.security import get_current_user
     app.dependency_overrides[get_current_user] = lambda: "test-dev-user"
 
-    with patch("asyncpg.connect", return_value=mock_conn):
-        # Case 1: Unrelated user (row exists, but user_id mismatch) - currently our query just returns None
-        mock_conn.fetchrow.return_value = None
-        response_unrelated = client.delete(f"/api/v1/reports/{str(uuid.uuid4())}")
+    with patch("app.api.report_router.make_user_client", new_callable=AsyncMock, return_value=mock_user_client):
+        # Case 1: Unrelated user (row exists but RLS hides it — empty prefetch result)
+        response_unrelated = client.delete(f"/api/v1/reports/{str(uuid.uuid4())}", headers={"Authorization": "Bearer test-dev-token-secret"})
         
         # Case 2: Nonexistent report_id (row does not exist)
-        mock_conn.fetchrow.return_value = None
-        response_notfound = client.delete(f"/api/v1/reports/{str(uuid.uuid4())}")
+        response_notfound = client.delete(f"/api/v1/reports/{str(uuid.uuid4())}", headers={"Authorization": "Bearer test-dev-token-secret"})
         
         assert response_unrelated.status_code == 404
         assert response_notfound.status_code == 404
         assert response_unrelated.json() == response_notfound.json()
         
-        # Verify the query includes the ownership clause
-        called_query = mock_conn.fetchrow.call_args[0][0]
-        called_args = mock_conn.fetchrow.call_args[0][1:]
-        assert "user_id = $2::uuid" in called_query
-        assert len(called_args) == 2
-        assert called_args[1] == "test-dev-user"
+        # SDK DELETE must not have been called in either case
+        assert not mock_user_client.table.return_value.delete.called
 
         app.dependency_overrides.clear()
