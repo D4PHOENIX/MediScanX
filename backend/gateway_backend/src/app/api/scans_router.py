@@ -1,3 +1,4 @@
+from app.utils.validation_utils import parse_uuid
 """History and trends endpoints for longitudinal scan tracking."""
 
 import uuid
@@ -72,7 +73,7 @@ async def get_history(
             detail="Database connection pool unavailable.",
         )
 
-    user_uuid = uuid.UUID(user_id)
+    user_uuid = parse_uuid(user_id, 'subject claim')
     try:
         return await ScansService.get_history(db_pool, user_uuid, modality, limit, offset)
     except asyncpg.PostgresError as e:
@@ -127,7 +128,7 @@ async def get_trends(
             detail="Database connection pool unavailable.",
         )
 
-    user_uuid = uuid.UUID(user_id)
+    user_uuid = parse_uuid(user_id, 'subject claim')
     try:
         return await ScansService.get_trends(db_pool, user_uuid, modality, limit)
     except asyncpg.PostgresError as e:
