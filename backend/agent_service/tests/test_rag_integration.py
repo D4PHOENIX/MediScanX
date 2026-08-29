@@ -13,7 +13,15 @@ from unittest.mock import patch
 _repo_root = Path(__file__).resolve().parents[2]
 if _repo_root.name == "backend":
     _repo_root = _repo_root.parent
-SCHEMA_PATH = _repo_root / "schema" / "0007_updated_schema.sql"
+schema_dir = _repo_root / "schema"
+baseline_files = sorted(schema_dir.glob("0001_*.sql"))
+if len(baseline_files) != 1:
+    files_found = [f.name for f in schema_dir.iterdir()]
+    raise FileNotFoundError(
+        f"Expected exactly one baseline schema matching 0001_*.sql in {schema_dir}, "
+        f"but found {len(baseline_files)}. Directory contents: {files_found}"
+    )
+SCHEMA_PATH = baseline_files[0]
 
 
 @pytest.fixture(scope="module")
@@ -42,6 +50,13 @@ async def db_pool(postgres_container):
         await conn.execute("CREATE SCHEMA IF NOT EXISTS auth;")
         await conn.execute("CREATE TABLE IF NOT EXISTS auth.users (id UUID PRIMARY KEY, email TEXT, raw_user_meta_data JSONB);")
         await conn.execute("CREATE OR REPLACE FUNCTION auth.uid() RETURNS UUID AS $$ SELECT '00000000-0000-0000-0000-000000000000'::uuid $$ LANGUAGE sql;")
+        await conn.execute("CREATE ROLE authenticated NOLOGIN;")
+        
+        # Create storage schema to satisfy Supabase dependencies
+        await conn.execute("CREATE SCHEMA IF NOT EXISTS storage;")
+        await conn.execute("CREATE TABLE IF NOT EXISTS storage.buckets (id TEXT PRIMARY KEY, name TEXT, public BOOLEAN, file_size_limit BIGINT);")
+        await conn.execute("CREATE TABLE IF NOT EXISTS storage.objects (id UUID PRIMARY KEY, bucket_id TEXT REFERENCES storage.buckets(id), name TEXT, metadata JSONB, created_at TIMESTAMPTZ);")
+        await conn.execute("CREATE OR REPLACE FUNCTION storage.foldername(name TEXT) RETURNS TEXT[] AS $$ SELECT ARRAY['00000000-0000-0000-0000-000000000000'] $$ LANGUAGE sql;")
         
         # Set search path so vector type is found when it is created in extensions
         await conn.execute("SET search_path TO public, extensions, auth;")
