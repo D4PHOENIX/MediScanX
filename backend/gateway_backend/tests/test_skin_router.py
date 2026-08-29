@@ -448,3 +448,95 @@ async def test_skin_xai_false(auth_headers) -> None:
         assert kwargs.get("xai_path") is None
         assert response.json()["explainability"]["status"] == "none"
         assert response.json()["explainability"]["url"] is None
+
+@pytest.mark.asyncio
+async def test_skin_raw_upload_failure_returns_503(auth_headers, fake_ml_data) -> None:
+    from unittest.mock import patch
+    
+    mock_client = AsyncMock()
+    mock_response = MagicMock(spec=Response)
+    mock_response.status_code = 200
+    fake_ml_no_overlays = {"predicted_class": "benign", "confidence": 0.99, "top_findings": []}
+    mock_response.json.return_value = fake_ml_no_overlays
+    mock_client.post.return_value = mock_response
+    app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
+    
+    with patch("app.api.skin_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.skin_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage:
+        
+        mock_storage.side_effect = RuntimeError("Raw upload failed")
+        
+        response = client.post("/api/v1/skin/predict", headers=auth_headers,
+            files={"file": ("skin.jpg", b"data", "image/jpeg")},
+        )
+        
+        assert response.status_code == 503
+        assert response.json() == {"detail": "Raw image upload failed."}
+        mock_insert.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_skin_raw_upload_failure_after_overlays_cleans_up_and_returns_503(auth_headers, fake_ml_data) -> None:
+    from unittest.mock import patch
+    
+    mock_client = AsyncMock()
+    mock_response = MagicMock(spec=Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = fake_ml_data
+    mock_client.post.return_value = mock_response
+    app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
+    
+    with patch("app.api.skin_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.skin_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage, \
+         patch("app.api.skin_router.StorageService.delete_scan_objects", new_callable=AsyncMock) as mock_delete:
+        
+        def storage_side_effect(*args, **kwargs):
+            if "overlay" in kwargs.get("object_path", ""):
+                return ("url_overlay", kwargs.get("object_path"))
+            raise RuntimeError("Raw upload failed")
+            
+        mock_storage.side_effect = storage_side_effect
+        
+        response = client.post("/api/v1/skin/predict", headers=auth_headers,
+            files={"file": ("skin.jpg", b"data", "image/jpeg")},
+        )
+        
+        assert response.status_code == 503
+        mock_delete.assert_awaited_once()
+        mock_insert.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_skin_raw_upload_failure_cleanup_raises_still_returns_503(auth_headers, fake_ml_data) -> None:
+    from unittest.mock import patch
+    
+    mock_client = AsyncMock()
+    mock_response = MagicMock(spec=Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = fake_ml_data
+    mock_client.post.return_value = mock_response
+    app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
+    
+    with patch("app.api.skin_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.skin_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage, \
+         patch("app.api.skin_router.StorageService.delete_scan_objects", new_callable=AsyncMock) as mock_delete:
+        
+        def storage_side_effect(*args, **kwargs):
+            if "overlay" in kwargs.get("object_path", ""):
+                return ("url_overlay", kwargs.get("object_path"))
+            raise RuntimeError("Raw upload failed")
+            
+        mock_storage.side_effect = storage_side_effect
+        mock_delete.side_effect = Exception("Cleanup failed")
+        
+        response = client.post("/api/v1/skin/predict", headers=auth_headers,
+            files={"file": ("skin.jpg", b"data", "image/jpeg")},
+        )
+        
+        assert response.status_code == 503
+        mock_delete.assert_awaited_once()
+        mock_insert.assert_not_awaited()

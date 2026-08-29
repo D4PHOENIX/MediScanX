@@ -586,3 +586,95 @@ async def test_ecg_frontend_contract_alignment(auth_headers) -> None:
         assert data["ai_diagnosis"] == "Atrial Fibrillation"
         assert "scan_status" in data
 
+
+@pytest.mark.asyncio
+async def test_ecg_raw_upload_failure_returns_503(auth_headers, fake_ecg_ml_data) -> None:
+    from unittest.mock import patch
+    
+    mock_client = AsyncMock()
+    mock_response = MagicMock(spec=Response)
+    mock_response.status_code = 200
+    fake_ml_no_overlays = {"predicted_class": "normal", "confidence": 0.99, "top_findings": []}
+    mock_response.json.return_value = fake_ml_no_overlays
+    mock_client.post.return_value = mock_response
+    app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
+    
+    with patch("app.api.ecg_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.ecg_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage:
+        
+        mock_storage.side_effect = RuntimeError("Raw upload failed")
+        
+        response = client.post("/api/v1/ecg/predict", headers=auth_headers,
+            files={"file": ("ecg.bin", b"data", "application/octet-stream")},
+        )
+        
+        assert response.status_code == 503
+        assert response.json() == {"detail": "Raw image upload failed."}
+        mock_insert.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_ecg_raw_upload_failure_after_overlays_cleans_up_and_returns_503(auth_headers, fake_ecg_ml_data) -> None:
+    from unittest.mock import patch
+    
+    mock_client = AsyncMock()
+    mock_response = MagicMock(spec=Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = fake_ecg_ml_data
+    mock_client.post.return_value = mock_response
+    app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
+    
+    with patch("app.api.ecg_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.ecg_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage, \
+         patch("app.api.ecg_router.StorageService.delete_scan_objects", new_callable=AsyncMock) as mock_delete:
+        
+        def storage_side_effect(*args, **kwargs):
+            if "overlay" in kwargs.get("object_path", ""):
+                return ("url_overlay", kwargs.get("object_path"))
+            raise RuntimeError("Raw upload failed")
+            
+        mock_storage.side_effect = storage_side_effect
+        
+        response = client.post("/api/v1/ecg/predict", headers=auth_headers,
+            files={"file": ("ecg.bin", b"data", "application/octet-stream")},
+        )
+        
+        assert response.status_code == 503
+        mock_delete.assert_awaited_once()
+        mock_insert.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_ecg_raw_upload_failure_cleanup_raises_still_returns_503(auth_headers, fake_ecg_ml_data) -> None:
+    from unittest.mock import patch
+    
+    mock_client = AsyncMock()
+    mock_response = MagicMock(spec=Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = fake_ecg_ml_data
+    mock_client.post.return_value = mock_response
+    app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
+    
+    with patch("app.api.ecg_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.ecg_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage, \
+         patch("app.api.ecg_router.StorageService.delete_scan_objects", new_callable=AsyncMock) as mock_delete:
+        
+        def storage_side_effect(*args, **kwargs):
+            if "overlay" in kwargs.get("object_path", ""):
+                return ("url_overlay", kwargs.get("object_path"))
+            raise RuntimeError("Raw upload failed")
+            
+        mock_storage.side_effect = storage_side_effect
+        mock_delete.side_effect = Exception("Cleanup failed")
+        
+        response = client.post("/api/v1/ecg/predict", headers=auth_headers,
+            files={"file": ("ecg.bin", b"data", "application/octet-stream")},
+        )
+        
+        assert response.status_code == 503
+        mock_delete.assert_awaited_once()
+        mock_insert.assert_not_awaited()
