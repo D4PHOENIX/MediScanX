@@ -614,9 +614,53 @@ def test_triage_not_a_doctor(auth_headers, app_state_override):
     app.state.db_pool = pool
 
     resp = client.get("/api/v1/scans/triage", headers=auth_headers)
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "Caller is not a registered doctor"
+
+def test_triage_zero_relationships(auth_headers, app_state_override):
+    def fetchval_side_effect(query, *args):
+        if "doctor_profiles" in query:
+            return True
+        if "COUNT" in query:
+            return 0
+        return None
+
+    pool = MagicMock()
+    conn = AsyncMock()
+    conn.fetchval.side_effect = fetchval_side_effect
+    conn.fetch.return_value = []
+    pool.acquire.return_value = MockAcquireContextManager(conn)
+    app.state.db_pool = pool
+
+    resp = client.get("/api/v1/scans/triage", headers=auth_headers)
     assert resp.status_code == 200
     data = resp.json()
     assert data["items"] == []
+
+def test_triage_malformed_sub_claim(app_state_override):
+    from app.core.security import get_current_user
+    app.dependency_overrides.pop(get_current_user, None)
+    pool = MagicMock()
+    app.state.db_pool = pool
+    from jose import jwt
+    import time
+    
+    # Create an invalid token with a malformed sub claim
+    claims = {
+        "sub": "not-a-uuid",
+        "role": "authenticated",
+        "aud": "authenticated",
+        "iss": "https://ppwnixwhaxpsqvufdggy.supabase.co/auth/v1",
+        "exp": int(time.time()) + 3600
+    }
+    from tests.conftest import PRIVATE_PEM
+    token = jwt.encode(claims, PRIVATE_PEM, algorithm="ES256", headers={"kid": "test-kid"})
+    headers = {"Authorization": f"Bearer {token}"}
+    
+    resp = client.get("/api/v1/scans/triage", headers=headers)
+    print(resp.json())
+    assert resp.status_code == 422
+    assert "Malformed caller_id" in resp.json()["detail"]
 
 def test_triage_query_contains_predicates(auth_headers, app_state_override):
     def fetchval_side_effect(query, *args):
@@ -645,3 +689,37 @@ def test_triage_query_contains_predicates(auth_headers, app_state_override):
     assert "(cr.expires_at IS NULL OR cr.expires_at > now())" in q
     assert "ORDER BY s.scan_status DESC, s.scan_date DESC" in q
     assert "cr.status = 'pending'" not in q
+
+def test_claim_report_signed_url_ttl(auth_headers, app_state_override, valid_claim_token):
+    from app.core.config import gateway_config
+    token, patient_id = valid_claim_token
+    # mock doctor exists, no prior relationship
+    def fetchval_side_effect(query, *args):
+        if "doctor_profiles" in query:
+            return True
+        return None
+    def fetchrow_side_effect(query, *args):
+        return None
+    
+    pool = MagicMock()
+    conn = AsyncMock()
+    conn.fetchval.side_effect = fetchval_side_effect
+    conn.fetchrow.side_effect = fetchrow_side_effect
+    pool.acquire.return_value = MockAcquireContextManager(conn)
+    app.state.db_pool = pool
+    
+    mock_create_signed_url = AsyncMock(return_value={"signedURL": "http://fake-report-url"})
+    mock_from = MagicMock()
+    mock_from.create_signed_url = mock_create_signed_url
+    
+    app.state.supabase_client = MagicMock()
+    app.state.supabase_client.storage.from_.return_value = mock_from
+
+    resp = client.post("/api/v1/scans/claim", json={"token": token}, headers=auth_headers)
+    assert resp.status_code == 200
+    
+    # Assert it was called with the config constant, not a literal
+    mock_create_signed_url.assert_called_once_with(
+        f"{patient_id}_report.pdf",
+        gateway_config.signed_url_ttl_seconds
+    )
