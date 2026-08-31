@@ -147,6 +147,10 @@ final analyzeXRayProvider = Provider((ref) {
             );
         }
       } catch (e) {
+        if (e.toString().contains('503') || e.toString().contains('Server error')) {
+          debugPrint('🔴 [CloudDiagnosticService] Backend 503: $e');
+          rethrow; // Don't fall back silently on server failure, bubble it up to the UI
+        }
         debugPrint('⚠️ Cloud API Failed. Gracefully falling back to local model: $e');
       }
     }
@@ -181,6 +185,8 @@ final analyzeXRayProvider = Provider((ref) {
 
     generatedFindings.sort((a, b) => b.confidence.compareTo(a.confidence));
 
+    int scanStatus = redAlertTriggered ? 2 : (generatedFindings.isNotEmpty && highestConfidence > 0.5 ? 1 : 0);
+
     return DiagnosticResult(
       id: const Uuid().v4(),
       scanDate: DateTime.now(),
@@ -190,6 +196,7 @@ final analyzeXRayProvider = Provider((ref) {
       method: 'Quantized Edge TFLite',
       overallConfidence: highestConfidence,
       isRedAlert: redAlertTriggered,
+      scanStatus: scanStatus,
       tags: activeTags.isEmpty ? ['Normal'] : activeTags,
       recommendation: redAlertTriggered ? 'High confidence anomaly detected offline.' : 'No major anomalies detected.',
       findings: generatedFindings.isEmpty
@@ -485,6 +492,10 @@ final analyzeSkinProvider = Provider((ref) {
             );
         }
       } catch (e) {
+        if (e.toString().contains('503') || e.toString().contains('Server error')) {
+          debugPrint('🔴 [CloudDiagnosticService] Backend 503 for Skin: $e');
+          rethrow; // Don't fall back silently on server failure, bubble it up to the UI
+        }
         debugPrint('⚠️ Cloud API Failed for Skin. Gracefully falling back to local model: $e');
       }
     }
@@ -544,6 +555,8 @@ final analyzeSkinProvider = Provider((ref) {
         activeTags.add(topDiagnosis);
       }
 
+      int scanStatus = redAlertTriggered ? 2 : (highestConfidence > 0.6 && topDiagnosis != 'Benign' ? 1 : 0);
+
       return DiagnosticResult(
         id: const Uuid().v4(),
         scanDate: DateTime.now(),
@@ -553,6 +566,7 @@ final analyzeSkinProvider = Provider((ref) {
         method: 'INT8 Quantized TFLite',
         overallConfidence: highestConfidence,
         isRedAlert: redAlertTriggered,
+        scanStatus: scanStatus,
         tags: activeTags,
         recommendation: redAlertTriggered
             ? 'High risk of malignancy detected ($topDiagnosis). Urgent dermatological biopsy recommended.'

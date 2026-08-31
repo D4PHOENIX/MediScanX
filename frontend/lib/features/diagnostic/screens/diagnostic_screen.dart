@@ -104,6 +104,7 @@ class _DiagnosticScreenState extends ConsumerState<DiagnosticScreen> {
 
     final profileAsync = const AsyncValue.data(true);
     final scanHistoryAsync = ref.watch(userScanHistoryProvider(currentUserId));
+    final activeModule = _modules[ref.watch(diagnosticModuleIndexProvider)];
 
     final bool hasFile = _selectedImage != null;
 
@@ -148,7 +149,7 @@ class _DiagnosticScreenState extends ConsumerState<DiagnosticScreen> {
                               const SizedBox(height: 24),
                               _buildUploadBlock(hasFile),
                               const SizedBox(height: 32),
-                              _buildScanHistorySection(scanHistoryAsync, title: 'Recent Scan History'),
+                              _buildScanHistorySection(scanHistoryAsync, title: 'Recent Scan History', activeModule: activeModule),
                               const SizedBox(height: 40),
                             ],
                           ),
@@ -438,7 +439,7 @@ class _DiagnosticScreenState extends ConsumerState<DiagnosticScreen> {
     );
   }
 
-  Widget _buildScanHistorySection(AsyncValue<List<DiagnosticResult>> scanHistoryAsync, {required String title}) {
+  Widget _buildScanHistorySection(AsyncValue<List<DiagnosticResult>> scanHistoryAsync, {required String title, required String activeModule}) {
     return scanHistoryAsync.when(
       loading: () => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -456,14 +457,15 @@ class _DiagnosticScreenState extends ConsumerState<DiagnosticScreen> {
           Text('Failed to load scan history: $err', style: const TextStyle(color: textLight)),
         ],
       ),
-      data: (scans) {
+      data: (allScans) {
+        final scans = allScans.where((s) => s.scanType.contains(activeModule.split(' ').first)).toList();
         if (scans.isEmpty) {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: primaryBlue)),
               const SizedBox(height: 12),
-              const Text('No scans yet. Your history will appear here.', style: TextStyle(fontSize: 12, color: textLight)),
+              Text('No recent $activeModule scans. Your history will appear here.', style: const TextStyle(fontSize: 12, color: textLight)),
             ],
           );
         }

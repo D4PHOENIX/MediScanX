@@ -23,6 +23,8 @@ import 'dart:convert';
 
 import 'package:mediscanx_mobile/features/diagnostic/providers/scan_history_provider.dart';
 import 'package:mediscanx_mobile/features/referral/services/referral_service.dart';
+import 'package:mediscanx_mobile/core/network/api_client.dart';
+import 'package:dio/dio.dart';
 
 
 const Color primaryBlue = Color(0xFF003B5C);
@@ -256,8 +258,6 @@ class DashboardScreen extends ConsumerWidget {
                             _buildLargeDiagnosticCard(
                               title: 'Chest X-Ray',
                               subtitle: 'Pulmonary & thoracic screening',
-                              status: DiagnosticStatus.alert,
-                              timeAgo: '15m ago',
                               icon: Icons.monitor_heart,
                               onTap: () {
                                 // Set state to 0 before navigating
@@ -272,8 +272,6 @@ class DashboardScreen extends ConsumerWidget {
                                   child: _buildSmallDiagnosticCard(
                                     title: 'ECG Analysis',
                                     subtitle: 'Cardiac rhythm & ST...',
-                                    status: DiagnosticStatus.normal,
-                                    timeAgo: '2h ago',
                                     icon: Icons.show_chart,
                                     onTap: () {
                                       // Set state to 1 before navigating
@@ -287,8 +285,6 @@ class DashboardScreen extends ConsumerWidget {
                                   child: _buildSmallDiagnosticCard(
                                     title: 'Skin Lesion',
                                     subtitle: 'Dermoscopic AI clas...',
-                                    status: DiagnosticStatus.pending,
-                                    timeAgo: '1d ago',
                                     icon: Icons.center_focus_weak,
                                     onTap: () {
                                       // Set state to 2 before navigating
@@ -708,6 +704,16 @@ class DashboardScreen extends ConsumerWidget {
               context.goNamed('sync_debug');
             },
           ),
+          /*if (role.toLowerCase() != 'doctor')
+            ListTile(
+              leading: const Icon(Icons.people_outline_rounded, color: primaryBlue),
+              title: const Text('Manage Doctors', style: TextStyle(color: textDark, fontWeight: FontWeight.w600, fontSize: 14)),
+              subtitle: const Text('View and revoke doctor access', style: TextStyle(color: textLight, fontSize: 12)),
+              onTap: () {
+                Navigator.pop(context);
+                context.pushNamed('care_relationships');
+              },
+            ),*/
           const Spacer(),
           const Divider(),
           ListTile(
@@ -848,11 +854,7 @@ class DashboardScreen extends ConsumerWidget {
     );
   }
 
-  Widget _buildLargeDiagnosticCard({required String title, required String subtitle, required DiagnosticStatus status, required String timeAgo, required IconData icon, required VoidCallback onTap}) {
-    final bool isAlert = status == DiagnosticStatus.alert;
-    final Color bgColor = isAlert ? const Color(0xFFFFF7F7) : Colors.white;
-    final Color iconBgColor = isAlert ? const Color(0xFFFFEAEA) : const Color(0xFFEAF8FC);
-    final Color iconColor = isAlert ? const Color(0xFFE63946) : accentCyan;
+  Widget _buildLargeDiagnosticCard({required String title, required String subtitle, required IconData icon, required VoidCallback onTap}) {
     bool isHovered = false;
 
     return StatefulBuilder(
@@ -866,11 +868,13 @@ class DashboardScreen extends ConsumerWidget {
               child: AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
                   curve: Curves.easeOut,
-                  transform: isHovered ? (Matrix4.identity()..translate(0.0, -4.0)) : Matrix4.identity(),
+                  transform: isHovered ? (Matrix4.identity()..translate(0.0, -6.0)) : Matrix4.identity(),
+                  width: double.infinity,
                   padding: const EdgeInsets.all(20),
                   decoration: BoxDecoration(
-                      color: bgColor,
+                      color: Colors.white,
                       borderRadius: BorderRadius.circular(24),
+                      border: Border.all(color: primaryBlue.withOpacity(0.1)),
                       boxShadow: [
                         BoxShadow(color: primaryBlue.withOpacity(isHovered ? 0.12 : 0.05), blurRadius: isHovered ? 25 : 20, offset: isHovered ? const Offset(0, 8) : const Offset(0, 5))
                       ]
@@ -881,32 +885,21 @@ class DashboardScreen extends ConsumerWidget {
                         Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: iconBgColor, borderRadius: BorderRadius.circular(16)), child: Icon(icon, color: iconColor, size: 28)),
-                              if (isAlert) _buildBadge('RED ALERT', const Color(0xFFE63946), const Color(0xFFFFEAEA), showDot: true)
+                              Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: const Color(0xFFEAF8FC), borderRadius: BorderRadius.circular(16)), child: Icon(icon, color: accentCyan, size: 28)),
+                              _buildBadge('AI Powered', primaryBlue, const Color(0xFFE8F0FE), showDot: true)
                             ]
                         ),
                         const SizedBox(height: 16),
                         Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: primaryBlue)),
                         Text(subtitle, style: const TextStyle(fontSize: 13, color: textLight)),
-                        const SizedBox(height: 20),
-                        SizedBox(height: 30, child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: List.generate(5, (index) => Padding(padding: const EdgeInsets.only(right: 12.0), child: CircleAvatar(radius: 4, backgroundColor: isAlert ? const Color(0xFFE63946).withOpacity(0.5 + (index * 0.1)) : textLight))))),
                         const Divider(height: 30),
                         Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Text(isAlert ? 'High Risk' : 'Analysis Complete', style: TextStyle(fontWeight: FontWeight.bold, color: isAlert ? const Color(0xFFE63946) : textDark)),
-                              Row(children: [const Icon(Icons.access_time, size: 14, color: textLight), const SizedBox(width: 4), Text(timeAgo, style: const TextStyle(fontSize: 12, color: textLight))])
+                              const Text('Start New Scan', style: TextStyle(fontWeight: FontWeight.bold, color: primaryBlue)),
+                              const Icon(Icons.arrow_forward_ios_rounded, size: 14, color: primaryBlue)
                             ]
                         ),
-                        if (isAlert) ...[
-                          const SizedBox(height: 16),
-                          Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                              decoration: BoxDecoration(color: const Color(0xFFFFEAEA), borderRadius: BorderRadius.circular(12)),
-                              child: Row(mainAxisAlignment: MainAxisAlignment.center, children: const [Icon(Icons.warning_amber_rounded, color: Color(0xFFE63946), size: 16), SizedBox(width: 8), Text('Abnormality detected — tap to review', style: TextStyle(color: Color(0xFFE63946), fontSize: 13, fontWeight: FontWeight.w500))])
-                          )
-                        ]
                       ]
                   )
               ),
@@ -916,13 +909,7 @@ class DashboardScreen extends ConsumerWidget {
     );
   }
 
-  Widget _buildSmallDiagnosticCard({required String title, required String subtitle, required DiagnosticStatus status, required String timeAgo, required IconData icon, required VoidCallback onTap}) {
-    Color badgeColor; Color badgeBg; String badgeText;
-    switch (status) {
-      case DiagnosticStatus.normal: badgeColor = const Color(0xFF00A36C); badgeBg = const Color(0xFFE6F7F0); badgeText = 'Ready'; break;
-      case DiagnosticStatus.pending: badgeColor = const Color(0xFFF2994A); badgeBg = const Color(0xFFFFF5E6); badgeText = 'Pending'; break;
-      default: badgeColor = textLight; badgeBg = bgLight; badgeText = 'Unknown';
-    }
+  Widget _buildSmallDiagnosticCard({required String title, required String subtitle, required IconData icon, required VoidCallback onTap}) {
     bool isHovered = false;
 
     return StatefulBuilder(
@@ -941,6 +928,7 @@ class DashboardScreen extends ConsumerWidget {
                   decoration: BoxDecoration(
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(24),
+                      border: Border.all(color: primaryBlue.withOpacity(0.05)),
                       boxShadow: [
                         BoxShadow(color: primaryBlue.withOpacity(isHovered ? 0.12 : 0.05), blurRadius: isHovered ? 25 : 20, offset: isHovered ? const Offset(0, 8) : const Offset(0, 5))
                       ]
@@ -948,13 +936,7 @@ class DashboardScreen extends ConsumerWidget {
                   child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: const Color(0xFFEAF8FC), borderRadius: BorderRadius.circular(12)), child: Icon(icon, color: accentCyan, size: 22)),
-                              _buildBadge(badgeText, badgeColor, badgeBg, showDot: true)
-                            ]
-                        ),
+                        Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: const Color(0xFFEAF8FC), borderRadius: BorderRadius.circular(12)), child: Icon(icon, color: accentCyan, size: 22)),
                         const SizedBox(height: 16),
                         Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: primaryBlue)),
                         const SizedBox(height: 4),
@@ -963,8 +945,8 @@ class DashboardScreen extends ConsumerWidget {
                         Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Text(status == DiagnosticStatus.normal ? 'Normal' : 'Monitor', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: status == DiagnosticStatus.normal ? const Color(0xFF00A36C) : const Color(0xFFF2994A))),
-                              Row(children: [const Icon(Icons.access_time, size: 12, color: textLight), const SizedBox(width: 4), Text(timeAgo, style: const TextStyle(fontSize: 11, color: textLight))])
+                              const Text('Start', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: primaryBlue)),
+                              const Icon(Icons.arrow_forward, size: 14, color: primaryBlue)
                             ]
                         )
                       ]

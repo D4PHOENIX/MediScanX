@@ -11,6 +11,9 @@ class TriageItem {
   final int scanStatus;
   final DateTime scanDate;
   final String patientRef;
+  final String patientId;
+  final String? patientName;
+  final String? patientUsername;
   final String reportUrl;
 
   TriageItem({
@@ -21,6 +24,9 @@ class TriageItem {
     required this.scanStatus,
     required this.scanDate,
     required this.patientRef,
+    required this.patientId,
+    this.patientName,
+    this.patientUsername,
     required this.reportUrl,
   });
 
@@ -33,6 +39,9 @@ class TriageItem {
       scanStatus: json['scan_status'] ?? 0,
       scanDate: json['scan_date'] != null ? DateTime.parse(json['scan_date']) : DateTime.now(),
       patientRef: json['patient_ref'] ?? 'Unknown Patient',
+      patientId: json['patient_id'] ?? json['user_id'] ?? json['patient_ref'] ?? '',
+      patientName: json['patient_name'],
+      patientUsername: json['patient_username'],
       reportUrl: (json['explainability'] is Map) 
           ? (json['explainability']['url'] ?? '') 
           : '',

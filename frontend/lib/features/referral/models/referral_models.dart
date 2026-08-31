@@ -2,11 +2,13 @@ class ReferralResponse {
   final String patientId;
   final String signedUrl;
   final String message;
+  final String reportId;
 
   ReferralResponse({
     required this.patientId,
     required this.signedUrl,
     required this.message,
+    required this.reportId,
   });
 
   factory ReferralResponse.fromJson(Map<String, dynamic> json) {
@@ -14,6 +16,7 @@ class ReferralResponse {
       patientId: json['patient_id'] ?? '',
       signedUrl: json['signed_url'] ?? '',
       message: json['message'] ?? 'Report generated',
+      reportId: json['report_id'] ?? '',
     );
   }
 }
@@ -35,6 +38,7 @@ class CloudReportItem {
   final String reportId;
   final DateTime createdAt;
   final int scanCount;
+  final int? survivingScanCount;
   final String? url;
   final String? patientRef;
 
@@ -42,6 +46,7 @@ class CloudReportItem {
     required this.reportId,
     required this.createdAt,
     required this.scanCount,
+    this.survivingScanCount,
     this.url,
     this.patientRef,
   });
@@ -51,6 +56,7 @@ class CloudReportItem {
       reportId: json['report_id'] ?? '',
       createdAt: DateTime.tryParse(json['created_at'] ?? '') ?? DateTime.now(),
       scanCount: json['scan_count'] ?? 1,
+      survivingScanCount: json['surviving_scan_count'],
       url: json['url'],
       patientRef: json['patient_ref'],
     );

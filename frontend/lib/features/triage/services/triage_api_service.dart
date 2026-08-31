@@ -59,6 +59,7 @@ class TriageApiService {
   }
 
   /// Fetches the triage list for the authenticated doctor.
+  /// Throws [TriageAccessDeniedException] if the caller is not a registered doctor (403).
   Future<List<Map<String, dynamic>>> getTriageScans({int limit = 20, int offset = 0}) async {
     try {
       final jwtToken = await _getFreshToken();
@@ -77,13 +78,24 @@ class TriageApiService {
         final data = jsonDecode(response.body);
         final items = data['items'] as List<dynamic>? ?? [];
         return items.cast<Map<String, dynamic>>();
+      } else if (response.statusCode == 403) {
+        debugPrint('🔴 [TriageApiService] 403 — caller is not a registered doctor.');
+        throw TriageAccessDeniedException();
       } else {
         debugPrint('🔴 [TriageApiService] getTriageScans failed: ${response.statusCode}');
         return [];
       }
+    } on TriageAccessDeniedException {
+      rethrow;
     } catch (e) {
       debugPrint('🔴 [TriageApiService] getTriageScans Exception: $e');
       return [];
     }
   }
+}
+
+/// Thrown when the backend returns 403 — the caller is not a registered doctor.
+class TriageAccessDeniedException implements Exception {
+  @override
+  String toString() => 'Triage is only available for doctor accounts.';
 }

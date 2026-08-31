@@ -39,6 +39,7 @@ import 'package:mediscanx_mobile/features/chat/models/ai_chat_args.dart';
 import 'package:mediscanx_mobile/features/referral/screens/referral_package_screen.dart';
 import 'package:mediscanx_mobile/features/debug/screens/sync_debug_screen.dart';
 import 'package:mediscanx_mobile/features/triage/screens/triage_dashboard_screen.dart';
+import 'package:mediscanx_mobile/features/referral/screens/care_relationships_screen.dart';
 import 'package:mediscanx_mobile/features/dashboard/screens/temporal_tracking_screen.dart';
 import 'package:mediscanx_mobile/features/diagnostic/services/edge_outbox_service.dart';
 import 'package:mediscanx_mobile/features/downloads/screens/downloads_screen.dart';
@@ -302,7 +303,27 @@ class _ClaimProcessingScreenState extends State<ClaimProcessingScreen> {
     }
 
     if (result['access_granted'] == true && mounted) {
-      context.goNamed('triage');
+      final expiresAtStr = result['access_expires_at']?.toString();
+      if (expiresAtStr != null) {
+        final dt = DateTime.tryParse(expiresAtStr)?.toLocal();
+        if (dt != null) {
+          final formattedDate = '${dt.day}/${dt.month}/${dt.year} at ${dt.hour}:${dt.minute.toString().padLeft(2, '0')}';
+          await showDialog(
+            context: context,
+            builder: (_) => AlertDialog(
+              title: const Text('Access Granted'),
+              content: Text('You have been granted access to this patient\'s records until $formattedDate.'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('OK'),
+                )
+              ],
+            ),
+          );
+        }
+      }
+      if (mounted) context.goNamed('triage');
     } else if (result['access_granted'] == false && mounted) {
       final reason = result['reason']?.toString();
       if (reason != null && reason.isNotEmpty) {
@@ -337,7 +358,7 @@ class _ClaimProcessingScreenState extends State<ClaimProcessingScreen> {
           children: [
             CircularProgressIndicator(),
             SizedBox(height: 24),
-            Text('Processing your scan...', style: TextStyle(fontSize: 16)),
+            Text('Processing your claim...', style: TextStyle(fontSize: 16)),
           ],
         ),
       ),
@@ -426,6 +447,11 @@ final routerProvider = Provider<GoRouter>((ref) {
         name: 'diagnostic',
         builder: (context, state) => const DiagnosticScreen(),
       ),
+      /*GoRoute(
+        path: '/care-relationships',
+        name: 'care_relationships',
+        builder: (context, state) => const CareRelationshipsScreen(),
+      ),*/
       GoRoute(
         path: '/fusion-result',
         name: 'fusion_result',

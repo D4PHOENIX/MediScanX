@@ -1,7 +1,8 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/network/api_client.dart';
 import '../models/referral_models.dart';
@@ -92,19 +93,39 @@ class ReferralService {
 
   /// Download a report PDF to a local file path.
   /// Uses the freshly signed URL provided by the backend.
-  Future<bool> downloadReportToFile(String reportId, String? reportUrl, String savePath) async {
-    debugPrint('📋 Download strategy starting for report $reportId, reportUrl="$reportUrl"');
+  Future<bool> downloadReportToFile(String reportId, String savePath) async {
+    debugPrint('📋 Download strategy starting for report $reportId');
 
-    if (reportUrl == null || reportUrl.isEmpty) {
-      debugPrint('🔴 Report URL is null or empty, treating as download unavailable.');
-      return false;
-    }
+    try {
+      // The backend returns a 302 Redirect to the signed URL. 
+      // Dio automatically follows the redirect and fetches the actual PDF file.
+      // We use dio.download to stream the bytes safely to disk instead of parsing it as text.
+      final response = await _apiClient.dio.download(
+        '/reports/download/$reportId',
+        savePath,
+      );
 
-    if (reportUrl.startsWith('http')) {
-      return await _downloadAndValidate(reportUrl, savePath, 'Direct URL');
+      if (response.statusCode == 200) {
+        // Validate the file is actually a PDF
+        final file = File(savePath);
+        if (await file.exists() && await file.length() > 4) {
+          final bytes = await file.openRead(0, 5).first;
+          final header = String.fromCharCodes(bytes);
+          if (header.startsWith('%PDF')) {
+            debugPrint('✅ Valid PDF downloaded (${await file.length()} bytes)');
+            return true;
+          } else {
+            debugPrint('⚠️ Downloaded file is NOT a PDF (header: $header). Deleting.');
+            await file.delete();
+          }
+        }
+      } else {
+        debugPrint('🔴 Backend returned ${response.statusCode} for download endpoint.');
+      }
+    } catch (e) {
+      debugPrint('🔴 Failed to download report: $e');
     }
     
-    debugPrint('🔴 Report URL is not a valid HTTP URL: $reportUrl');
     return false;
   }
 

@@ -202,4 +202,30 @@ class CloudDiagnosticService {
       return null;
     }
   }
+
+  /// Deletes a scan from the cloud.
+  Future<bool> deleteScan(String scanId) async {
+    try {
+      final jwtToken = await _getFreshToken();
+      if (jwtToken == null) return false;
+
+      final url = Uri.parse('${ApiConstants.baseUrl}/scans/$scanId');
+      final response = await http.delete(
+        url,
+        headers: {
+          'Authorization': 'Bearer $jwtToken',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        return true;
+      } else {
+        debugPrint('🔴 [CloudDiagnosticService] deleteScan failed: ${response.statusCode} - ${response.body}');
+        throw Exception('Delete failed with status: ${response.statusCode}');
+      }
+    } catch (e) {
+      debugPrint('🔴 [CloudDiagnosticService] deleteScan exception: $e');
+      rethrow;
+    }
+  }
 }
