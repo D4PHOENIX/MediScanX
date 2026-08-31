@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-import asyncpg
+
 from fastapi import APIRouter, HTTPException, Depends, Request, Query, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
@@ -114,62 +114,53 @@ async def generate_report(payload: GenerateReportRequest, request: Request, curr
     }
 
 
-@router.get("/download/{patient_id}")
-async def download_report(patient_id: str, request: Request, current_user: str = Depends(get_current_user)) -> RedirectResponse:
+@router.get("/download/{report_id}")
+async def download_report(report_id: str, request: Request, current_user: str = Depends(get_current_user)) -> RedirectResponse:
     """Redirects the client to the securely signed cloud storage URL for the report.
 
+    Uses the request-scoped Supabase client (caller JWT) so the existing RLS
+    SELECT policies (``reports_patient_select`` and ``reports_doctor_select``)
+    gate access.  No service-role read of ``reports`` occurs here — consistent
+    with the list endpoint at :214.
+
     Args:
-        patient_id (str): The universal identifier of the target patient.
+        report_id (str): The UUID of the target report.
         request (Request): The incoming FastAPI request (provides access to app state).
 
     Returns:
         RedirectResponse: A 307 Temporary Redirect to the Supabase storage object.
 
     Raises:
-        HTTPException: Raises 404 if the report has not been generated, or 500
+        HTTPException: Raises 404 if the report is not found or RLS denies access, or 500
             if cloud storage integration fails.
     """
-    
-    # 1. Enforce tenant ownership (or care access) before signing a URL
-    dsn: str | None = gateway_config.database_url
-    if not dsn:
-        raise HTTPException(status_code=500, detail="DATABASE_URL not set")
+    # Fetch storage_path through the request-scoped client so RLS scopes it.
+    # An empty result means either the report doesn't exist or RLS denied access;
+    # both surface as 404 to prevent enumeration.
+    user_client = await make_user_client(request)
+    fetch_result = await (
+        user_client.table("reports")
+        .select("storage_path")
+        .eq("report_id", report_id)
+        .execute()
+    )
+    rows = fetch_result.data or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="Report not found. Please generate first.")
 
-    conn: asyncpg.Connection = await asyncpg.connect(dsn)
-    try:
-        if current_user != patient_id:
-            # Check care relationship if caller is not the patient
-            has_access = await conn.fetchval(
-                """
-                SELECT EXISTS (
-                    SELECT 1 FROM care_relationships 
-                    WHERE doctor_id = $1::uuid 
-                      AND patient_id = $2::uuid 
-                      AND status = 'active'
-                      AND (expires_at IS NULL OR expires_at > now())
-                )
-                """,
-                current_user,
-                patient_id
-            )
-            if not has_access:
-                raise HTTPException(status_code=403, detail="Access denied")
-    finally:
-        await conn.close()
-        
-    # Using a deterministic path allows any worker to resolve the file location.
-    file_path = f"{patient_id}_report.pdf"
+    storage_path: str = rows[0]["storage_path"]
 
     # Storage URL generation uses the service-role client: signed URL creation
     # is a storage control-plane operation, not a reports table read.
     sb_client = request.app.state.supabase_client
     try:
         bucket = sb_client.storage.from_("medical_reports")
-        signed_url = await ReportGenerator.sign_report_url(bucket, file_path, raise_on_failure=True)
+        signed_url = await ReportGenerator.sign_report_url(bucket, storage_path, raise_on_failure=True)
     except Exception as exc:
         raise HTTPException(status_code=404, detail="Report not found. Please generate first.") from exc
 
     return RedirectResponse(url=signed_url)
+
 
 
 @router.get("", response_model=ReportListResponse)

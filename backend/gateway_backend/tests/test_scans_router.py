@@ -377,14 +377,22 @@ def valid_claim_token():
 
 def test_claim_valid_token_no_prior_relationship(auth_headers, app_state_override, valid_claim_token):
     token, patient_id = valid_claim_token
+    expected_storage_path = f"{patient_id}/{uuid.uuid4()}.pdf"
     # mock doctor exists, no prior relationship
     def fetchval_side_effect(query, *args):
         if "doctor_profiles" in query:
             return True
         return None
     def fetchrow_side_effect(query, *args):
+        # First acquire: reports lookup
+        if "FROM reports" in query:
+            row = MagicMock()
+            row.__getitem__ = lambda self, key: expected_storage_path if key == "storage_path" else None
+            row.__bool__ = lambda self: True
+            return row
+        # Second acquire: care_relationships lookup — no prior relationship
         return None
-    
+
     pool = MagicMock()
     conn = AsyncMock()
     conn.fetchval.side_effect = fetchval_side_effect
@@ -407,13 +415,19 @@ def test_claim_valid_token_no_prior_relationship(auth_headers, app_state_overrid
 
 def test_claim_valid_token_active_relationship(auth_headers, app_state_override, valid_claim_token):
     token, patient_id = valid_claim_token
+    expected_storage_path = f"{patient_id}/{uuid.uuid4()}.pdf"
     def fetchval_side_effect(query, *args):
         if "doctor_profiles" in query:
             return True
         return None
     def fetchrow_side_effect(query, *args):
+        if "FROM reports" in query:
+            row = MagicMock()
+            row.__getitem__ = lambda self, key: expected_storage_path if key == "storage_path" else None
+            row.__bool__ = lambda self: True
+            return row
         return {"status": "active", "ended_at": None}
-    
+
     pool = MagicMock()
     conn = AsyncMock()
     conn.fetchval.side_effect = fetchval_side_effect
@@ -434,13 +448,19 @@ def test_claim_valid_token_active_relationship(auth_headers, app_state_override,
 
 def test_claim_valid_token_revoked_relationship(auth_headers, app_state_override, valid_claim_token):
     token, patient_id = valid_claim_token
+    expected_storage_path = f"{patient_id}/{uuid.uuid4()}.pdf"
     def fetchval_side_effect(query, *args):
         if "doctor_profiles" in query:
             return True
         return None
     def fetchrow_side_effect(query, *args):
+        if "FROM reports" in query:
+            row = MagicMock()
+            row.__getitem__ = lambda self, key: expected_storage_path if key == "storage_path" else None
+            row.__bool__ = lambda self: True
+            return row
         return {"status": "revoked", "ended_at": None}
-    
+
     pool = MagicMock()
     conn = AsyncMock()
     conn.fetchval.side_effect = fetchval_side_effect
@@ -458,13 +478,19 @@ def test_claim_valid_token_revoked_relationship(auth_headers, app_state_override
 
 def test_claim_valid_token_ended_at_set(auth_headers, app_state_override, valid_claim_token):
     token, patient_id = valid_claim_token
+    expected_storage_path = f"{patient_id}/{uuid.uuid4()}.pdf"
     def fetchval_side_effect(query, *args):
         if "doctor_profiles" in query:
             return True
         return None
     def fetchrow_side_effect(query, *args):
+        if "FROM reports" in query:
+            row = MagicMock()
+            row.__getitem__ = lambda self, key: expected_storage_path if key == "storage_path" else None
+            row.__bool__ = lambda self: True
+            return row
         return {"status": "active", "ended_at": datetime.now(timezone.utc)}
-    
+
     pool = MagicMock()
     conn = AsyncMock()
     conn.fetchval.side_effect = fetchval_side_effect
@@ -483,9 +509,19 @@ def test_claim_valid_token_ended_at_set(auth_headers, app_state_override, valid_
 def test_claim_caller_is_patient(auth_headers, app_state_override, valid_claim_token):
     token, patient_id = valid_claim_token
     app.dependency_overrides[get_current_user] = lambda: patient_id
-    
+
+    expected_storage_path = f"{patient_id}/{uuid.uuid4()}.pdf"
     pool = MagicMock()
     conn = AsyncMock()
+    # The reports lookup runs in its own acquire() before the patient short-circuit check.
+    def fetchrow_side_effect(query, *args):
+        if "FROM reports" in query:
+            row = MagicMock()
+            row.__getitem__ = lambda self, key: expected_storage_path if key == "storage_path" else None
+            row.__bool__ = lambda self: True
+            return row
+        return None
+    conn.fetchrow.side_effect = fetchrow_side_effect
     pool.acquire.return_value = MockAcquireContextManager(conn)
     app.state.db_pool = pool
     app.state.supabase_client = MagicMock()
@@ -496,19 +532,29 @@ def test_claim_caller_is_patient(auth_headers, app_state_override, valid_claim_t
     data = resp.json()
     assert data["access_granted"] is False
     assert conn.execute.call_count == 0
-    assert conn.fetchrow.call_count == 0
+    # fetchrow is now called once (reports lookup) before the caller==patient short-circuit
+    assert conn.fetchrow.call_count == 1
     app.dependency_overrides[get_current_user] = lambda: FAKE_USER_ID
 
 def test_claim_caller_not_a_doctor(auth_headers, app_state_override, valid_claim_token):
     token, patient_id = valid_claim_token
+    expected_storage_path = f"{patient_id}/{uuid.uuid4()}.pdf"
     def fetchval_side_effect(query, *args):
         if "doctor_profiles" in query:
             return False
         return None
-    
+    def fetchrow_side_effect(query, *args):
+        if "FROM reports" in query:
+            row = MagicMock()
+            row.__getitem__ = lambda self, key: expected_storage_path if key == "storage_path" else None
+            row.__bool__ = lambda self: True
+            return row
+        return None
+
     pool = MagicMock()
     conn = AsyncMock()
     conn.fetchval.side_effect = fetchval_side_effect
+    conn.fetchrow.side_effect = fetchrow_side_effect
     pool.acquire.return_value = MockAcquireContextManager(conn)
     app.state.db_pool = pool
     app.state.supabase_client = MagicMock()
@@ -519,6 +565,7 @@ def test_claim_caller_not_a_doctor(auth_headers, app_state_override, valid_claim
     data = resp.json()
     assert data["access_granted"] is False
     assert conn.execute.call_count == 0
+
 
 def test_claim_expired_token(auth_headers, app_state_override):
     app.state.db_pool = MagicMock()
@@ -693,33 +740,106 @@ def test_triage_query_contains_predicates(auth_headers, app_state_override):
 def test_claim_report_signed_url_ttl(auth_headers, app_state_override, valid_claim_token):
     from app.core.config import gateway_config
     token, patient_id = valid_claim_token
+    # The expected storage_path as stored in the reports table — the format
+    # that generate_qr_report actually writes: {patient_id}/{report_id}.pdf
+    expected_storage_path = f"{patient_id}/{uuid.uuid4()}.pdf"
+
     # mock doctor exists, no prior relationship
     def fetchval_side_effect(query, *args):
         if "doctor_profiles" in query:
             return True
         return None
     def fetchrow_side_effect(query, *args):
+        # Simulate the reports table lookup returning the real storage_path
+        if "FROM reports" in query:
+            row = MagicMock()
+            row.__getitem__ = lambda self, key: expected_storage_path if key == "storage_path" else None
+            row.__bool__ = lambda self: True
+            return row
         return None
-    
+
     pool = MagicMock()
     conn = AsyncMock()
     conn.fetchval.side_effect = fetchval_side_effect
     conn.fetchrow.side_effect = fetchrow_side_effect
     pool.acquire.return_value = MockAcquireContextManager(conn)
     app.state.db_pool = pool
-    
+
     mock_create_signed_url = AsyncMock(return_value={"signedURL": "http://fake-report-url"})
     mock_from = MagicMock()
     mock_from.create_signed_url = mock_create_signed_url
-    
+
     app.state.supabase_client = MagicMock()
     app.state.supabase_client.storage.from_.return_value = mock_from
 
     resp = client.post("/api/v1/scans/claim", json={"token": token}, headers=auth_headers)
     assert resp.status_code == 200
-    
-    # Assert it was called with the config constant, not a literal
+
+    # Assert path came from the reports row, not from a template.
+    # The call must use the storage_path read from the DB, and the TTL from config.
     mock_create_signed_url.assert_called_once_with(
-        f"{patient_id}_report.pdf",
+        expected_storage_path,
         gateway_config.signed_url_ttl_seconds
     )
+    # Paranoia: confirm the old template path was never passed
+    for call in mock_create_signed_url.call_args_list:
+        assert call.args[0] != f"{patient_id}_report.pdf", (
+            "claim_report constructed the path from a template instead of reading "
+            "storage_path from the reports table"
+        )
+
+
+def test_claim_report_path_is_never_constructed_from_template(auth_headers, app_state_override, valid_claim_token):
+    """Fail immediately if storage_path is ever built from a template string.
+
+    This test enforces the invariant that every call site reads storage_path
+    from the reports row rather than constructing it as
+    f'{patient_id}_report.pdf'.  If the regression is reintroduced the
+    assertion on mock_create_signed_url's first positional argument will fail.
+    """
+    from app.core.config import gateway_config
+    token, patient_id = valid_claim_token
+    db_storage_path = f"{patient_id}/{uuid.uuid4()}.pdf"  # real format written by generate_qr_report
+
+    def fetchval_side_effect(query, *args):
+        if "doctor_profiles" in query:
+            return True
+        return None
+
+    def fetchrow_side_effect(query, *args):
+        if "FROM reports" in query:
+            row = MagicMock()
+            row.__getitem__ = lambda self, key: db_storage_path if key == "storage_path" else None
+            row.__bool__ = lambda self: True
+            return row
+        return None
+
+    pool = MagicMock()
+    conn = AsyncMock()
+    conn.fetchval.side_effect = fetchval_side_effect
+    conn.fetchrow.side_effect = fetchrow_side_effect
+    pool.acquire.return_value = MockAcquireContextManager(conn)
+    app.state.db_pool = pool
+
+    mock_create_signed_url = AsyncMock(return_value={"signedURL": "http://signed"})
+    mock_from = MagicMock()
+    mock_from.create_signed_url = mock_create_signed_url
+    app.state.supabase_client = MagicMock()
+    app.state.supabase_client.storage.from_.return_value = mock_from
+
+    resp = client.post("/api/v1/scans/claim", json={"token": token}, headers=auth_headers)
+    assert resp.status_code == 200
+
+    # The path passed to storage must equal what the DB row says, never the template.
+    assert mock_create_signed_url.called, "create_signed_url was never called"
+    actual_path = mock_create_signed_url.call_args.args[0]
+    template_path = f"{patient_id}_report.pdf"
+    assert actual_path != template_path, (
+        f"BUG REGRESSED: claim_report constructed the stale template path "
+        f"'{template_path}' instead of reading storage_path='{db_storage_path}' "
+        f"from the reports table"
+    )
+    assert actual_path == db_storage_path, (
+        f"Expected path from DB row ('{db_storage_path}') but got '{actual_path}'"
+    )
+

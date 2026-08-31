@@ -235,13 +235,30 @@ class ScansService:
         if not patient_id:
             raise HTTPException(status_code=403, detail="Token missing subject.")
 
-        # Always prepare the report URL to return, even if access is not granted.
-        report_path = f"{patient_id}_report.pdf"
+        token_scan_ids = payload.get("scan_ids", [])
+        if not token_scan_ids:
+            raise HTTPException(status_code=403, detail="Token missing scan IDs.")
+
+        # Match the report whose scan_ids exactly match the token's scan_ids
+        # using exact set equality (@> AND <@) regardless of array order.
+        async with db_pool.acquire() as _conn:
+            report_row = await _conn.fetchrow(
+                "SELECT storage_path FROM reports WHERE user_id = $1::uuid "
+                "AND scan_ids @> $2::uuid[] AND scan_ids <@ $2::uuid[] "
+                "ORDER BY created_at DESC LIMIT 1",
+                patient_id,
+                token_scan_ids,
+            )
+        if not report_row or not report_row["storage_path"]:
+            raise HTTPException(status_code=404, detail="No report exists covering the shared scans.")
+        report_path = report_row["storage_path"]
         try:
             signed_resp = await supabase_client.storage.from_("medical_reports").create_signed_url(report_path, gateway_config.signed_url_ttl_seconds)
             report_url = signed_resp.get("signedURL") or signed_resp.get("signedUrl")
             if not report_url:
                 raise ValueError("Could not get signed URL.")
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Failed to sign report URL: {e}")
             raise HTTPException(status_code=500, detail="Failed to retrieve report URL.")
