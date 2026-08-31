@@ -619,7 +619,9 @@ def test_triage_returns_scans(auth_headers, app_state_override):
         "xai_status": "none",
         "xai_path": None,
         "storage_path": "path",
-        "user_id": uuid.UUID(patient_id)
+        "user_id": uuid.UUID(patient_id),
+        "full_name": None,
+        "username": None
     }
     def fetchval_side_effect(query, *args):
         if "doctor_profiles" in query:
@@ -842,4 +844,165 @@ def test_claim_report_path_is_never_constructed_from_template(auth_headers, app_
     assert actual_path == db_storage_path, (
         f"Expected path from DB row ('{db_storage_path}') but got '{actual_path}'"
     )
+
+
+def test_triage_patient_name_present(auth_headers, app_state_override):
+    patient_id = str(uuid.uuid4())
+    row = {
+        "scan_id": str(uuid.uuid4()),
+        "modality": "cxr",
+        "ai_diagnosis": "Pneumonia",
+        "confidence": 0.9,
+        "scan_status": 2,
+        "scan_date": datetime.now(timezone.utc),
+        "xai_status": "none",
+        "xai_path": None,
+        "storage_path": "path",
+        "user_id": uuid.UUID(patient_id),
+        "full_name": "John Doe",
+        "username": "johndoe123",
+    }
+    def fetchval_side_effect(query, *args):
+        if "doctor_profiles" in query:
+            return True
+        if "COUNT" in query:
+            return 1
+        return None
+    def fetch_side_effect(query, *args):
+        if "ORDER BY" in query:
+            return [row]
+        return []
+
+    pool = MagicMock()
+    conn = AsyncMock()
+    conn.fetchval.side_effect = fetchval_side_effect
+    conn.fetch.side_effect = fetch_side_effect
+    pool.acquire.return_value = MockAcquireContextManager(conn)
+    app.state.db_pool = pool
+
+    resp = client.get("/api/v1/scans/triage", headers=auth_headers)
+    assert resp.status_code == 200
+    item = resp.json()["items"][0]
+    assert item["patient_name"] == "John Doe"
+    assert item["patient_username"] == "johndoe123"
+
+def test_triage_patient_name_missing_left_join(auth_headers, app_state_override):
+    patient_id = str(uuid.uuid4())
+    row = {
+        "scan_id": str(uuid.uuid4()),
+        "modality": "cxr",
+        "ai_diagnosis": "Pneumonia",
+        "confidence": 0.9,
+        "scan_status": 2,
+        "scan_date": datetime.now(timezone.utc),
+        "xai_status": "none",
+        "xai_path": None,
+        "storage_path": "path",
+        "user_id": uuid.UUID(patient_id),
+        "full_name": None,
+        "username": None,
+    }
+    def fetchval_side_effect(query, *args):
+        if "doctor_profiles" in query:
+            return True
+        if "COUNT" in query:
+            return 1
+        return None
+    def fetch_side_effect(query, *args):
+        if "ORDER BY" in query:
+            return [row]
+        return []
+
+    pool = MagicMock()
+    conn = AsyncMock()
+    conn.fetchval.side_effect = fetchval_side_effect
+    conn.fetch.side_effect = fetch_side_effect
+    pool.acquire.return_value = MockAcquireContextManager(conn)
+    app.state.db_pool = pool
+
+    resp = client.get("/api/v1/scans/triage", headers=auth_headers)
+    assert resp.status_code == 200
+    item = resp.json()["items"][0]
+    assert item["patient_name"] is None
+    assert item["patient_username"] is None
+
+def test_history_patient_name_absent(auth_headers, app_state_override):
+    patient_id = str(uuid.uuid4())
+    row = {
+        "scan_id": str(uuid.uuid4()),
+        "modality": "cxr",
+        "ai_diagnosis": "Pneumonia",
+        "confidence": 0.9,
+        "scan_status": 2,
+        "scan_date": datetime.now(timezone.utc),
+        "xai_status": "none",
+        "xai_path": None,
+        "storage_path": "path",
+        "user_id": uuid.UUID(patient_id),
+    }
+    def fetchval_side_effect(query, *args):
+        if "COUNT" in query:
+            return 1
+        return None
+    def fetch_side_effect(query, *args):
+        if "ORDER BY" in query:
+            return [row]
+        return []
+
+    pool = MagicMock()
+    conn = AsyncMock()
+    conn.fetchval.side_effect = fetchval_side_effect
+    conn.fetch.side_effect = fetch_side_effect
+    pool.acquire.return_value = MockAcquireContextManager(conn)
+    app.state.db_pool = pool
+
+    resp = client.get("/api/v1/scans/history", headers=auth_headers)
+    assert resp.status_code == 200
+    item = resp.json()["items"][0]
+    # Because they default to None, they should be absent or None.
+    assert item.get("patient_name") is None
+    assert item.get("patient_username") is None
+
+def test_triage_no_private_fields_leaked(auth_headers, app_state_override):
+    patient_id = str(uuid.uuid4())
+    row = {
+        "scan_id": str(uuid.uuid4()),
+        "modality": "cxr",
+        "ai_diagnosis": "Pneumonia",
+        "confidence": 0.9,
+        "scan_status": 2,
+        "scan_date": datetime.now(timezone.utc),
+        "xai_status": "none",
+        "xai_path": None,
+        "storage_path": "path",
+        "user_id": uuid.UUID(patient_id),
+        "full_name": "John Doe",
+        "username": "johndoe123",
+    }
+    def fetchval_side_effect(query, *args):
+        if "doctor_profiles" in query:
+            return True
+        if "COUNT" in query:
+            return 1
+        return None
+    def fetch_side_effect(query, *args):
+        if "ORDER BY" in query:
+            return [row]
+        return []
+
+    pool = MagicMock()
+    conn = AsyncMock()
+    conn.fetchval.side_effect = fetchval_side_effect
+    conn.fetch.side_effect = fetch_side_effect
+    pool.acquire.return_value = MockAcquireContextManager(conn)
+    app.state.db_pool = pool
+
+    resp = client.get("/api/v1/scans/triage", headers=auth_headers)
+    assert resp.status_code == 200
+    item = resp.json()["items"][0]
+    
+    # Assert on absence
+    private_fields = ["email", "phone_number", "date_of_birth", "location", "gender", "medical_history"]
+    for field in private_fields:
+        assert field not in item
 

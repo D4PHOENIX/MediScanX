@@ -203,6 +203,8 @@ class HistoryScanItem(BaseModel):
     has_image: bool = Field(..., description="True if storage_path IS NOT NULL")
     explainability: ExplainabilityInfo
     patient_ref: Optional[str] = Field(None, description="Masked patient identifier used in triage.")
+    patient_name: Optional[str] = None
+    patient_username: Optional[str] = None
 
 
 class HistoryResponse(BaseModel):

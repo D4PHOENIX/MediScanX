@@ -375,8 +375,10 @@ class ScansService:
             query = """
                 SELECT 
                     s.scan_id, s.modality, s.ai_diagnosis, s.confidence, s.scan_status, 
-                    s.scan_date, s.xai_status, s.xai_path, s.storage_path, s.user_id
+                    s.scan_date, s.xai_status, s.xai_path, s.storage_path, s.user_id,
+                    pr.full_name, pr.username
                 FROM scan_results s
+                LEFT JOIN public.patient_records pr ON pr.user_id = s.user_id
                 WHERE (
                     s.doctor_id = $1::uuid
                     OR EXISTS (
@@ -416,7 +418,9 @@ class ScansService:
                             url=build_xai_authenticated_url(row["xai_path"]),
                             modality=row["modality"],
                         ),
-                        patient_ref=patient_ref
+                        patient_ref=patient_ref,
+                        patient_name=row["full_name"],
+                        patient_username=row["username"]
                     )
                 )
 
