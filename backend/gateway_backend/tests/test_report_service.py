@@ -104,52 +104,126 @@ async def test_generate_report_unauthorized_is_rejected(auth_headers):
 
 @pytest.mark.asyncio
 async def test_download_endpoint_own_report_succeeds(auth_headers):
+    """Caller's own report: RLS returns a row, storage returns a signed URL, 307 redirect."""
+    report_id = str(uuid.uuid4())
+    storage_path = f"test-dev-user/{report_id}.pdf"
+
     mock_supabase_client = MagicMock()
     mock_bucket = AsyncMock()
     mock_supabase_client.storage.from_.return_value = mock_bucket
     mock_bucket.create_signed_url.return_value = {"signedURL": "https://signed.mock/report.pdf"}
     app.state.supabase_client = mock_supabase_client
-    
-    # Caller requests their own patient_id (no care_relationships check needed)
-    patient_id = "test-dev-user"
-    file_path = f"{patient_id}_report.pdf"
-    
-    mock_conn = AsyncMock()
-    with patch("asyncpg.connect", return_value=mock_conn):
+
+    # Mock the request-scoped user client: RLS returns one row with the storage_path.
+    mock_user_client = MagicMock()
+    mock_fetch_result = MagicMock()
+    mock_fetch_result.data = [{"storage_path": storage_path}]
+    mock_user_client.table.return_value.select.return_value.eq.return_value.execute = AsyncMock(
+        return_value=mock_fetch_result
+    )
+
+    with patch("app.api.report_router.make_user_client", new_callable=AsyncMock, return_value=mock_user_client):
         response = client.get(
-            f"/api/v1/reports/download/{patient_id}",
+            f"/api/v1/reports/download/{report_id}",
             headers={"Authorization": "Bearer test-dev-token-secret"},
             follow_redirects=False
         )
         assert response.status_code == 307
         assert response.headers["location"] == "https://signed.mock/report.pdf"
-        mock_bucket.create_signed_url.assert_awaited_once_with(file_path, 86400)
+        # The path passed to storage must come from the DB row, not a template.
+        mock_bucket.create_signed_url.assert_awaited_once_with(storage_path, 86400)
 
 
 @pytest.mark.asyncio
 async def test_download_endpoint_unauthorized_is_rejected(auth_headers):
+    """RLS returns no row for an unauthorized caller → 404 (enumeration-safe)."""
+    report_id = str(uuid.uuid4())
+
     mock_supabase_client = MagicMock()
     mock_bucket = AsyncMock()
     mock_supabase_client.storage.from_.return_value = mock_bucket
     app.state.supabase_client = mock_supabase_client
 
-    patient_id = "other-patient-id"
-    
-    mock_conn = AsyncMock()
-    # Mock fetchval to return False, signifying no care relationship access
-    mock_conn.fetchval.return_value = False
-    
-    with patch("asyncpg.connect", return_value=mock_conn):
+    # Mock the request-scoped user client: RLS returns empty (access denied).
+    mock_user_client = MagicMock()
+    mock_fetch_result = MagicMock()
+    mock_fetch_result.data = []
+    mock_user_client.table.return_value.select.return_value.eq.return_value.execute = AsyncMock(
+        return_value=mock_fetch_result
+    )
+
+    with patch("app.api.report_router.make_user_client", new_callable=AsyncMock, return_value=mock_user_client):
         response = client.get(
-            f"/api/v1/reports/download/{patient_id}",
+            f"/api/v1/reports/download/{report_id}",
             headers={"Authorization": "Bearer test-dev-token-secret"},
             follow_redirects=False
         )
-        assert response.status_code == 403
-        assert "Access denied" in response.json()["detail"]
-        
+        assert response.status_code == 404
+        assert "not found" in response.json()["detail"].lower()
+
         # Assert create_signed_url was never called
         mock_bucket.create_signed_url.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_download_endpoint_expired_care_relationship_rejected(auth_headers):
+    """RLS enforces expiry: an expired care relationship → RLS returns nothing → 404."""
+    # With the new endpoint, RLS enforces access, so an expired care relationship
+    # simply causes the reports_doctor_select policy to return no rows.  The
+    # handler sees an empty result and raises 404, the same as any other denied
+    # access (enumeration-safe, consistent with the list and delete endpoints).
+    report_id = str(uuid.uuid4())
+
+    mock_supabase_client = MagicMock()
+    mock_bucket = AsyncMock()
+    mock_supabase_client.storage.from_.return_value = mock_bucket
+    app.state.supabase_client = mock_supabase_client
+
+    mock_user_client = MagicMock()
+    mock_fetch_result = MagicMock()
+    mock_fetch_result.data = []  # RLS blocked — expired relationship
+    mock_user_client.table.return_value.select.return_value.eq.return_value.execute = AsyncMock(
+        return_value=mock_fetch_result
+    )
+
+    with patch("app.api.report_router.make_user_client", new_callable=AsyncMock, return_value=mock_user_client):
+        response = client.get(
+            f"/api/v1/reports/download/{report_id}",
+            headers={"Authorization": "Bearer test-dev-token-secret"},
+            follow_redirects=False
+        )
+        assert response.status_code == 404
+        assert "not found" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_download_endpoint_null_expiry_granted(auth_headers):
+    """A doctor with a NULL-expiry active care relationship can download via RLS."""
+    report_id = str(uuid.uuid4())
+    storage_path = f"some-patient/{report_id}.pdf"
+
+    mock_supabase_client = MagicMock()
+    mock_bucket = AsyncMock()
+    mock_supabase_client.storage.from_.return_value = mock_bucket
+    mock_bucket.create_signed_url.return_value = {"signedURL": "https://signed.mock/report.pdf"}
+    app.state.supabase_client = mock_supabase_client
+
+    # RLS allows the doctor (null-expiry active care) → returns the row.
+    mock_user_client = MagicMock()
+    mock_fetch_result = MagicMock()
+    mock_fetch_result.data = [{"storage_path": storage_path}]
+    mock_user_client.table.return_value.select.return_value.eq.return_value.execute = AsyncMock(
+        return_value=mock_fetch_result
+    )
+
+    with patch("app.api.report_router.make_user_client", new_callable=AsyncMock, return_value=mock_user_client):
+        response = client.get(
+            f"/api/v1/reports/download/{report_id}",
+            headers={"Authorization": "Bearer test-dev-token-secret"},
+            follow_redirects=False
+        )
+        assert response.status_code == 307
+        assert response.headers["location"] == "https://signed.mock/report.pdf"
 
 
 def _extract_story_text(story: list) -> str:
@@ -247,53 +321,7 @@ async def test_generate_report_partial_scans_rejected(auth_headers):
         mock_supabase_client.storage.from_.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_download_endpoint_expired_care_relationship_rejected(auth_headers):
-    mock_supabase_client = MagicMock()
-    app.state.supabase_client = mock_supabase_client
 
-    patient_id = "other-patient-id"
-    
-    mock_conn = AsyncMock()
-    # Mock fetchval to return False (expired relationship)
-    mock_conn.fetchval.return_value = False
-    
-    with patch("asyncpg.connect", return_value=mock_conn):
-        response = client.get(
-            f"/api/v1/reports/download/{patient_id}",
-            headers={"Authorization": "Bearer test-dev-token-secret"},
-            follow_redirects=False
-        )
-        assert response.status_code == 403
-        assert "Access denied" in response.json()["detail"]
-        
-        # Assert the query string includes expires_at
-        called_query = mock_conn.fetchval.call_args[0][0]
-        assert "expires_at IS NULL OR expires_at > now()" in called_query
-
-
-@pytest.mark.asyncio
-async def test_download_endpoint_null_expiry_granted(auth_headers):
-    mock_supabase_client = MagicMock()
-    mock_bucket = AsyncMock()
-    mock_supabase_client.storage.from_.return_value = mock_bucket
-    mock_bucket.create_signed_url.return_value = {"signedURL": "https://signed.mock/report.pdf"}
-    app.state.supabase_client = mock_supabase_client
-
-    patient_id = "other-patient-id"
-    
-    mock_conn = AsyncMock()
-    # Mock fetchval to return True (active and indefinite relationship)
-    mock_conn.fetchval.return_value = True
-    
-    with patch("asyncpg.connect", return_value=mock_conn):
-        response = client.get(
-            f"/api/v1/reports/download/{patient_id}",
-            headers={"Authorization": "Bearer test-dev-token-secret"},
-            follow_redirects=False
-        )
-        assert response.status_code == 307
-        assert response.headers["location"] == "https://signed.mock/report.pdf"
 
 # ---------------------------------------------------------------------------
 # Test 15: PDF Story contains AI Summary when present
