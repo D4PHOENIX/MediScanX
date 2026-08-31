@@ -193,23 +193,12 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> with SingleTi
         }
       }
 
-      if (report.url == null || report.url!.isEmpty) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Download unavailable: No signed URL provided.'),
-            backgroundColor: Colors.orange,
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-        return;
-      }
+      // We now fetch the dynamic signed URL on demand
 
       debugPrint('📥 Downloading cloud report: id=${report.reportId}, url=${report.url}');
       
       final success = await ReferralService().downloadReportToFile(
         report.reportId,
-        report.url!,
         savePath,
       );
 
@@ -321,7 +310,7 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> with SingleTi
                         itemBuilder: (context, index) {
                           final report = cloudState.reports[index];
                           final filename = 'Report_${report.reportId.substring(0, 6).toUpperCase()}.pdf';
-                          final isDownloadable = report.url != null && report.url!.isNotEmpty;
+                          final isDownloadable = true;
                           
                           return ListTile(
                             contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
@@ -349,11 +338,24 @@ class _DownloadsScreenState extends ConsumerState<DownloadsScreen> with SingleTi
                             ),
                             subtitle: Padding(
                               padding: const EdgeInsets.only(top: 4),
-                              child: Text(
-                                isDownloadable 
-                                    ? '${_formatDate(report.createdAt.toLocal())} • ${report.scanCount} scan${report.scanCount == 1 ? "" : "s"}'
-                                    : 'File unavailable',
-                                style: TextStyle(color: Colors.grey[600], fontSize: 13),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    isDownloadable 
+                                        ? '${_formatDate(report.createdAt.toLocal())} • ${report.scanCount} scan${report.scanCount == 1 ? "" : "s"}'
+                                        : 'File unavailable',
+                                    style: TextStyle(color: Colors.grey[600], fontSize: 13),
+                                  ),
+                                  if (report.survivingScanCount != null && report.survivingScanCount! < report.scanCount)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 2),
+                                      child: Text(
+                                        '${report.scanCount - report.survivingScanCount!} source scan(s) no longer available',
+                                        style: const TextStyle(color: Colors.orange, fontSize: 11, fontStyle: FontStyle.italic),
+                                      ),
+                                    ),
+                                ],
                               ),
                             ),
                             trailing: isPatient

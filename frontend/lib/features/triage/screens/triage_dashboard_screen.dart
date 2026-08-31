@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../providers/triage_provider.dart';
+import '../services/triage_api_service.dart';
 
 const Color primaryBlue = Color(0xFF003B5C);
 const Color textDark = Color(0xFF002D40);
@@ -82,9 +82,65 @@ class TriageDashboardScreen extends ConsumerWidget {
                       loading: () => const Center(
                         child: CircularProgressIndicator(color: accentCyan),
                       ),
-                      error: (err, stack) => Center(
-                        child: Text('Failed to load triage queue: $err'),
-                      ),
+                      error: (err, stack) {
+                        // 403 - the caller is not a registered doctor
+                        if (err is TriageAccessDeniedException) {
+                          return Center(
+                            child: Padding(
+                              padding: const EdgeInsets.all(24),
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  const Icon(Icons.lock_outline, size: 64, color: primaryBlue),
+                                  const SizedBox(height: 16),
+                                  const Text(
+                                    'Triage is available for doctor accounts only.',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(color: textDark, fontSize: 16),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  const Text(
+                                    'If you are a doctor, please make sure your profile is set up correctly.',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(color: textLight, fontSize: 13),
+                                  ),
+                                  const SizedBox(height: 24),
+                                  ElevatedButton(
+                                    onPressed: () => context.goNamed('dashboard'),
+                                    style: ElevatedButton.styleFrom(backgroundColor: primaryBlue),
+                                    child: const Text('Back to Dashboard', style: TextStyle(color: Colors.white)),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        }
+                        // Any other error (network, server, etc.)
+                        return Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(Icons.cloud_off, size: 48, color: textLight),
+                              const SizedBox(height: 16),
+                              const Text(
+                                'Could not load the triage queue.',
+                                style: TextStyle(color: textDark, fontSize: 15),
+                              ),
+                              const SizedBox(height: 8),
+                              const Text(
+                                'Please check your connection and try again.',
+                                style: TextStyle(color: textLight, fontSize: 13),
+                              ),
+                              const SizedBox(height: 16),
+                              TextButton.icon(
+                                onPressed: () => ref.invalidate(triageQueueProvider),
+                                icon: const Icon(Icons.refresh, size: 18),
+                                label: const Text('Retry'),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
                       data: (scans) {
                         if (scans.isEmpty) {
                           return const Center(
@@ -99,7 +155,7 @@ class TriageDashboardScreen extends ConsumerWidget {
                           itemCount: scans.length,
                           separatorBuilder: (_, __) => const SizedBox(height: 12),
                           itemBuilder: (context, index) {
-                            return _buildTriageCard(scans[index]);
+                            return _buildTriageCard(context, scans[index]);
                           },
                         );
                       },
@@ -176,19 +232,52 @@ class TriageDashboardScreen extends ConsumerWidget {
     );
   }
 
-  Widget _buildTriageCard(TriageItem item) {
+  Widget _buildTriageCard(BuildContext context, TriageItem item) {
     final riskLabel = _riskLabel(item.scanStatus);
     final riskColor = _riskColor(item.scanStatus);
     final typeLabel = _scanTypeLabel(item.modality);
     final scanDate = _formatScanDate(item.scanDate.toLocal());
 
     return GestureDetector(
-      onTap: () async {
+      onTap: () {
         if (item.reportUrl.isNotEmpty) {
-          final uri = Uri.parse(item.reportUrl);
-          if (await canLaunchUrl(uri)) {
-            await launchUrl(uri, mode: LaunchMode.externalApplication);
-          }
+          showDialog(
+            context: context,
+            builder: (context) => Dialog(
+              backgroundColor: Colors.transparent,
+              child: Stack(
+                alignment: Alignment.topRight,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: InteractiveViewer(
+                      child: Image.network(
+                        item.reportUrl,
+                        headers: {
+                          'Authorization': 'Bearer ${Supabase.instance.client.auth.currentSession?.accessToken}'
+                        },
+                        errorBuilder: (context, error, stackTrace) {
+                          return Container(
+                            color: Colors.white,
+                            padding: const EdgeInsets.all(20),
+                            child: const Text('Failed to load image. Ensure you have internet access.'),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.cancel, color: Colors.red, size: 32),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ],
+              ),
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No visual heatmap available for this scan.')),
+          );
         }
       },
       child: Container(
@@ -216,7 +305,7 @@ class TriageDashboardScreen extends ConsumerWidget {
                 children: [
                   Text(typeLabel, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: textDark)),
                   const SizedBox(height: 4),
-                  Text('${item.patientRef} • ${(item.confidence * 100).toStringAsFixed(1)}%', style: const TextStyle(fontSize: 12, color: textLight)),
+                  Text('${item.patientName ?? item.patientUsername ?? item.patientRef} • ${(item.confidence * 100).toStringAsFixed(1)}%', style: const TextStyle(fontSize: 12, color: textLight)),
                 ],
               ),
             ),

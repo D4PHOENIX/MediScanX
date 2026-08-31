@@ -140,6 +140,7 @@ class EdgeOutboxService {
               }
 
               debugPrint('[Outbox] ❌ PERMANENT failure for ${(scan.scanId ?? scan.id)}: $reason');
+              debugPrint('[Outbox] ❌ Full 422 response body: ${cloudResponse.body}');
               // Store the rejection reason in metadata so the UI can surface it.
               final existingMeta = scan.metadata;
               Map<String, dynamic> meta = {};

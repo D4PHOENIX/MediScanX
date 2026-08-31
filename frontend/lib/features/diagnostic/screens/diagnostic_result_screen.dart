@@ -13,6 +13,7 @@ import 'package:mediscanx_mobile/features/diagnostic/services/scan_dao.dart';
 import 'package:uuid/uuid.dart';
 import 'package:mediscanx_mobile/core/widgets/authenticated_network_image.dart';
 import 'package:mediscanx_mobile/core/utils/error_helper.dart'; // NEW IMPORT
+import 'package:mediscanx_mobile/features/diagnostic/services/cloud_diagnostic_service.dart';
 import 'dart:io';
 
 // Fallback Provider for ECG and Skin mock data (used if no real ML data is passed)
@@ -125,6 +126,62 @@ class _DiagnosticResultScreenState extends ConsumerState<DiagnosticResultScreen>
       }
     }
   }
+
+  Future<void> _deleteScan(DiagnosticResult resultData) async {
+    final bool? confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Scan', style: TextStyle(color: primaryBlue, fontWeight: FontWeight.bold)),
+        content: const Text(
+            'Are you sure you want to delete this scan?\n\n'
+            'Any reports already generated from it will remain.',
+            style: TextStyle(color: textDark)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel', style: TextStyle(color: textLight)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: ElevatedButton.styleFrom(backgroundColor: alertRed),
+            child: const Text('Delete', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Deleting scan...')),
+    );
+
+    try {
+      // 1. Delete from Cloud
+      final cloudService = CloudDiagnosticService();
+      await cloudService.deleteScan(resultData.id);
+
+      // 2. Delete from Local DB
+      final dao = ScanDao(DatabaseManager.drift);
+      await dao.db.customStatement('DELETE FROM scan_results WHERE id = ? OR scan_id = ?', [resultData.id, resultData.id]);
+      
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Scan deleted successfully.')),
+      );
+      
+      // Navigate back
+      context.pop();
+    } catch (e) {
+      debugPrint('🔴 Delete failed: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not delete scan. Please try again.')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final role = (Supabase.instance.client.auth.currentUser?.userMetadata?['role'] ??
@@ -195,6 +252,23 @@ class _DiagnosticResultScreenState extends ConsumerState<DiagnosticResultScreen>
                               backgroundColor: primaryBlue,
                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                               elevation: 2,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        SizedBox(
+                          width: double.infinity,
+                          height: 56,
+                          child: OutlinedButton.icon(
+                            onPressed: () => _deleteScan(resultData),
+                            icon: const Icon(Icons.delete_outline, color: alertRed),
+                            label: const Text(
+                              'Delete Scan',
+                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: alertRed),
+                            ),
+                            style: OutlinedButton.styleFrom(
+                              side: const BorderSide(color: alertRed),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                             ),
                           ),
                         ),
@@ -291,9 +365,9 @@ class _DiagnosticResultScreenState extends ConsumerState<DiagnosticResultScreen>
                 ),
                 child: Row(
                   children: const [
-                    Icon(Icons.send_rounded, size: 14, color: Colors.white),
+                    Icon(Icons.share, size: 14, color: Colors.white),
                     SizedBox(width: 6),
-                    Text('Share Report', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white)),
+                    Text('Share', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white)),
                   ],
                 ),
               ),
