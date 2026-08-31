@@ -1,0 +1,53 @@
+[project]
+name = "gateway_backend"
+version = "0.1.0"
+description = "Gateway Backend for Medical AI Orchestration"
+requires-python = ">=3.11"
+dependencies = [
+    # --- API & Web Framework ---
+    "fastapi",
+    "uvicorn[standard]",
+    # --- Data Validation & Settings ---
+    "pydantic>=2.0",
+    "pydantic-settings",
+    "python-multipart",
+    "qrcode[pil]",
+    "Pillow",
+    "reportlab",
+    "supabase",
+    "asyncpg",
+    # --- Utilities & Networking ---
+    # PyJWT removed — python-jose[cryptography] is the sole JWT library used
+    "httpx",
+    "python-jose[cryptography]",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-asyncio>=0.23",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/app"]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated:DeprecationWarning",
+    "ignore::UserWarning",
+    "ignore::DeprecationWarning"
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]

@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cxr-service"
+version = "0.1.0"
+description = "Chest X-ray diagnostic microservice"
+requires-python = ">=3.10"
+dependencies = [
+    # --- API & Web Framework ---
+    "fastapi>=0.100",
+    "uvicorn>=0.22",
+    # --- Data Validation & Settings ---
+    "pydantic>=2",
+    "pydantic-settings",
+    "python-multipart",
+    # --- Machine Learning & AI ---
+    "numpy",
+    "opencv-python-headless",
+    "pandas",
+    "torch>=2.0",
+    "torchvision",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx>=0.25",
+    "pytest>=7.4",
+    "pytest-asyncio>=0.23",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/app"]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated:DeprecationWarning",
+    "ignore::UserWarning",
+    "ignore::DeprecationWarning"
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }

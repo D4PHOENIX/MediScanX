@@ -1,0 +1,121 @@
+services:
+    gateway_backend:
+        build:
+            context: ./gateway_backend
+            dockerfile: Dockerfile
+        container_name: mediscanx-gateway
+        env_file: .env
+        ports:
+            - "127.0.0.1:8000:8000"
+        environment:
+            - PORT=${PORT:-8000}
+            - DEV_MODE=${DEV_MODE:-False}
+            - DEV_TOKEN_SECRET=${DEV_TOKEN_SECRET:-}
+            - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
+            - MAX_UPLOAD_BYTES=${MAX_UPLOAD_BYTES}
+            - SUPABASE_STORAGE_BUCKET=${SUPABASE_STORAGE_BUCKET}
+            - REPORT_TOKEN_SECRET=${REPORT_TOKEN_SECRET}
+            - CLAIM_BASE_URL=${CLAIM_BASE_URL:-https://mediscanx.app/claim}
+            - ANDROID_CERT_FINGERPRINTS=${ANDROID_CERT_FINGERPRINTS}
+        dns:
+            - 8.8.8.8
+            - 1.1.1.1
+        healthcheck:
+            test: ["CMD-SHELL", "curl -f http://localhost:8000/api/v1/health/healthz || exit 1"]
+            interval: 30s
+            timeout: 10s
+            retries: 3
+            start_period: 5s
+        depends_on:
+            - agent_service
+            - cxr_service
+            - ecg_service
+            - skin_service
+        networks:
+            - mediscanx-net
+
+    agent_service:
+        build:
+            context: ./agent_service
+            dockerfile: Dockerfile
+        container_name: mediscanx-agent
+        env_file: .env
+        environment:
+            # Override DATABASE_URL with the session pooler URL (port 5432).
+            - DATABASE_URL=${AGENT_DATABASE_URL}
+        dns:
+            - 8.8.8.8
+            - 1.1.1.1
+        depends_on:
+            - cxr_service
+            - ecg_service
+            - skin_service
+        networks:
+            - mediscanx-net
+
+    cxr_service:
+        build:
+            context: ./cxr_service
+            dockerfile: Dockerfile
+        container_name: mediscanx-cxr
+        env_file: .env
+        ports:
+            - "127.0.0.1:8001:8001"
+        environment:
+            - CXR_WEIGHTS_PATH=${CXR_WEIGHTS_PATH:-/weights/best_densenet_cihmlc.pth}
+            - CXR_THRESHOLDS_PATH=${CXR_THRESHOLDS_PATH:-/weights/best_thresholds.npy}
+        volumes:
+            - ./cxr_service/weights:/weights
+        networks:
+            - mediscanx-net
+
+    ecg_service:
+        build:
+            context: ./ecg_service
+            dockerfile: Dockerfile
+        container_name: mediscanx-ecg
+        env_file: .env
+        ports:
+            - "127.0.0.1:8002:8002"
+        environment:
+            - ECG_ONNX_PATH=${ECG_ONNX_PATH:-/models/mediscanx_ecg_3rdexp_finetuned.onnx}
+            - ECG_CKPT_PATH=${ECG_CKPT_PATH:-/models/mediscanx_ecg_3rdexp_weights_only.ckpt}
+        volumes:
+            - ./ecg_service/weights:/models
+            - ecg_diagnostics_vol:/app/data/ecg_diagnostics
+        networks:
+            - mediscanx-net
+
+    skin_service:
+        build:
+            context: ./skin_service
+            dockerfile: Dockerfile
+        container_name: mediscanx-skin
+        env_file: .env
+        ports:
+            - "127.0.0.1:8003:8003"
+        environment:
+            - SKIN_WEIGHTS_PATH=${SKIN_WEIGHTS_PATH:-/weights/skin_weights.pt}
+        volumes:
+            - ./skin_service/weights:/weights
+        networks:
+            - mediscanx-net
+
+    cloudflared:
+        image: cloudflare/cloudflared:latest
+        container_name: mediscanx-tunnel
+        command: tunnel --no-autoupdate run
+        environment:
+            - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN:-}
+        networks:
+            - mediscanx-net
+        restart: unless-stopped
+        depends_on:
+            - gateway_backend
+
+networks:
+    mediscanx-net:
+        driver: bridge
+
+volumes:
+    ecg_diagnostics_vol:
