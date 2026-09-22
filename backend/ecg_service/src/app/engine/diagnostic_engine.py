@@ -139,25 +139,22 @@ class ECGDiagnosticEngine:
 
         if input_type == 'wfdb':
             if isinstance(self.preprocessor, ECGPreprocessor):
+                # Production path: full dual-branch extraction.
                 res = self.preprocessor.process_wfdb_dualbranch(input_path)
-            elif hasattr(self.preprocessor, "process_wfdb"):
-                res = self.preprocessor.process_wfdb(input_path)
             else:
-                res = self.preprocessor.process_wfdb_dualbranch(input_path)
+                # Test / mock path: legacy 2-tuple (tensor, signal_array).
+                res = self.preprocessor.process_wfdb(input_path)
 
         elif input_type == 'image':
             if isinstance(self.preprocessor, ECGPreprocessor):
+                # Production path: full dual-branch extraction.
                 res = self.preprocessor.process_image_dualbranch(
-                    input_path,
-                    diagnostic_mode=diagnostic_mode,
-                )
-            elif hasattr(self.preprocessor, "process_image"):
-                res = self.preprocessor.process_image(
                     input_path,
                     diagnostic_mode=diagnostic_mode,
                 )
             else:
-                res = self.preprocessor.process_image_dualbranch(
+                # Test / mock path: legacy 2-tuple (tensor, signal_array).
+                res = self.preprocessor.process_image(
                     input_path,
                     diagnostic_mode=diagnostic_mode,
                 )

@@ -233,16 +233,24 @@ class DualBranchECGClassifier(nn.Module):
                         pass
 
         try:
+            # Attempt safe deserialisation first (PyTorch >= 2.0 recommendation).
+            # This will succeed for pure weight-only checkpoints.
             ckpt: Dict[str, Any] = torch.load(
                 str(path),
                 map_location="cpu",
-                weights_only=False,
+                weights_only=True,
             )
-        except Exception as exc:
+        except Exception:
+            # PyTorch Lightning checkpoints embed Python objects (config dataclasses,
+            # loss buffers) that cannot be restored with weights_only=True.
+            # Fall back explicitly and log a warning so the operator is aware.
             logger.warning(
-                "Standard unpickling failed (%s); trying fallback load.", exc
+                "weights_only=True failed for %s — falling back to weights_only=False "
+                "(Lightning checkpoint with embedded Python objects). "
+                "Ensure this checkpoint originates from a trusted source.",
+                path,
             )
-            ckpt = torch.load(str(path), map_location="cpu")
+            ckpt = torch.load(str(path), map_location="cpu", weights_only=False)
 
         state_dict: Dict[str, Any] = ckpt.get("state_dict", ckpt)
 

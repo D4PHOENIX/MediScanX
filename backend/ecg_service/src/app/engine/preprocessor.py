@@ -295,13 +295,14 @@ class ECGPreprocessor:
         """Read a WFDB record and extract all three Dual-Branch input tensors.
 
         Extracts:
-          1. x_morph : (1, 12, 250) - Z-score normalised 2.5s morphology window
-          2. x_rhythm: (1, 1, 1000) - Z-score normalised 10.0s continuous Lead II strip
-          3. x_volt  : (1, 12)      - Physical peak-to-peak voltage amplitudes in mV
-          4. signals_2d: (12, 250)  - Raw morphology array for Grad-CAM overlay
+          1. x_morph  : (1, 12, 250) - Z-score normalised 2.5s morphology window.
+          2. x_rhythm : (1, 1, 1000) - Z-score normalised 10.0s continuous Lead II strip.
+          3. x_volt   : (1, 12)      - Physical peak-to-peak voltage amplitudes in mV.
+          4. signals_2d: (12, 250)   - Normalised morphology array, shape (leads, samples),
+                                       used for Grad-CAM overlay rendering.
 
         Args:
-            file_path (str): Path to WFDB record.
+            file_path (str): Path to WFDB record (with or without file extension).
 
         Returns:
             Tuple[torch.Tensor, torch.Tensor, torch.Tensor, np.ndarray]:
@@ -336,6 +337,10 @@ class ECGPreprocessor:
         # 2. Branch 2: Temporal Continuous Lead II Rhythm Strip (1000 samples @ 100 Hz = 10.0 s)
         lead_idx: int = getattr(self.cfg, "rhythm_lead_idx", 1)
         rhythm_seq_len: int = getattr(self.cfg, "rhythm_seq_length", 1000)
+        if not (0 <= lead_idx < sig.shape[1]):
+            raise InvalidLeadCountError(
+                f"Invalid rhythm_lead_idx={lead_idx}; WFDB record has {sig.shape[1]} leads."
+            )
         rhythm_raw: np.ndarray = sig[:, lead_idx: lead_idx + 1]
         r_mean: np.ndarray = np.mean(rhythm_raw, axis=0)
         r_std: np.ndarray = np.std(rhythm_raw, axis=0) + 1e-6
@@ -346,8 +351,11 @@ class ECGPreprocessor:
             rhythm_norm = rhythm_norm[:rhythm_seq_len]
         rhythm_tensor: torch.Tensor = torch.tensor(rhythm_norm.T, dtype=torch.float32).unsqueeze(0)
 
-        # 3. Branch 1: Spatial 12-Lead Morphology Segment (250 samples @ 100 Hz = 2.5 s)
-        morph_raw: np.ndarray = sig[: self.cfg.seq_length]
+        # 3. Branch 1: Spatial 12-Lead Morphology Segment
+        #    Use morph_seq_length (250 samples = 2.5 s @ 100 Hz) as the single source
+        #    of truth for the morphology window — avoids divergence with cfg.seq_length.
+        morph_len: int = getattr(self.cfg, "morph_seq_length", self.cfg.seq_length)
+        morph_raw: np.ndarray = sig[: morph_len]
         m_mean: np.ndarray = np.mean(morph_raw, axis=0)
         m_std: np.ndarray = np.std(morph_raw, axis=0) + 1e-6
         morph_norm: np.ndarray = (morph_raw - m_mean) / m_std
@@ -355,8 +363,8 @@ class ECGPreprocessor:
 
         if signals_2d.shape[0] != self.cfg.num_leads:
             raise InvalidLeadCountError(f"Expected {self.cfg.num_leads} leads, got {signals_2d.shape[0]}")
-        if signals_2d.shape[1] != self.cfg.seq_length:
-            raise SignalLengthMismatchError(f"Expected length {self.cfg.seq_length}, got {signals_2d.shape[1]}")
+        if signals_2d.shape[1] != morph_len:
+            raise SignalLengthMismatchError(f"Expected length {morph_len}, got {signals_2d.shape[1]}")
 
         morph_tensor: torch.Tensor = torch.tensor(signals_2d, dtype=torch.float32).unsqueeze(0)
         return morph_tensor, rhythm_tensor, volt_tensor, signals_2d
@@ -498,6 +506,13 @@ class ECGPreprocessor:
         Returns:
             Tuple[torch.Tensor, torch.Tensor, torch.Tensor, np.ndarray]:
                 (x_morph, x_rhythm, x_volt, signals_2d).
+
+        Note:
+            ``x_volt`` is derived from the raw ``signals_2d`` array (the
+            optically-digitised waveform in normalised pixel units) **before**
+            z-score normalisation.  Using the z-scored ``morph_tensor``
+            would collapse all peak-to-peak amplitudes toward 1.0 (unit
+            variance) and strip out the clinically meaningful voltage signal.
         """
         morph_tensor, signals_2d = self.process_image(
             image_path,
@@ -505,14 +520,24 @@ class ECGPreprocessor:
             diagnostic_out_dir=diagnostic_out_dir,
         )
 
-        # 2. Continuous Lead II rhythm strip interpolated from Lead II (index 1)
+        # 2. Continuous Lead II rhythm strip interpolated from morph_tensor.
+        #    morph_tensor is (1, 12, seq_length); index into lead dimension.
         lead_idx: int = getattr(self.cfg, "rhythm_lead_idx", 1)
         rhythm_seq_len: int = getattr(self.cfg, "rhythm_seq_length", 1000)
+        if not (0 <= lead_idx < morph_tensor.shape[1]):
+            raise InvalidLeadCountError(
+                f"Invalid rhythm_lead_idx={lead_idx}; image has {morph_tensor.shape[1]} leads."
+            )
         lead2 = morph_tensor[:, lead_idx: lead_idx + 1, :]
         rhythm_tensor = F.interpolate(lead2, size=rhythm_seq_len, mode="linear", align_corners=False)
 
-        # 3. Voltage peak-to-peak amplitude vector
-        volt_tensor = (torch.amax(morph_tensor, dim=-1) - torch.amin(morph_tensor, dim=-1)).float()
+        # 3. Voltage peak-to-peak amplitude vector.
+        #    IMPORTANT: use signals_2d (raw pixel-unit waveform, shape (12, seq_length))
+        #    NOT morph_tensor which has been z-score normalised and no longer carries
+        #    meaningful amplitude information.
+        volt_raw: np.ndarray = np.ptp(signals_2d, axis=1).astype(np.float32)  # (12,)
+        volt_tensor: torch.Tensor = torch.tensor(volt_raw, dtype=torch.float32).unsqueeze(0)  # (1, 12)
 
         return morph_tensor, rhythm_tensor, volt_tensor, signals_2d
+
 
