@@ -21,6 +21,17 @@ from app.core.config import Settings
 
 logger: logging.Logger = logging.getLogger(__name__)
 
+# ── Human-readable condition names for the Grad-CAM annotation ─────────────
+# Maps short model superclass labels to full clinical display names.
+# These are rendered as the figure title on every Grad-CAM overlay image.
+_CONDITION_DISPLAY: dict = {
+    "NORM": "Normal Sinus Rhythm",
+    "MI":   "Myocardial Infarction",
+    "STTC": "ST/T-Wave Changes",
+    "CD":   "Conduction Defect",
+    "HYP":  "Hypertrophy",
+}
+
 
 class GradCAM1D:
     """1-D Grad‑CAM for time‑series explainability.
@@ -240,19 +251,47 @@ class GradCAM1D:
         signal_array: np.ndarray,
         heatmap: np.ndarray,
         lead_name: str = "",
+        condition_label: str = "",
+        confidence: float = 0.0,
     ) -> np.ndarray:
         """Render a clinical‑grade overlay of raw signal + Grad‑CAM heatmap.
 
+        Produces a fully annotated PNG image containing:
+
+        * The raw ECG waveform for the selected lead (black line).
+        * A semi-transparent ``jet`` saliency heatmap behind the waveform
+          (blue = low model attention, red = high model attention).
+        * A bold figure title showing the full clinical condition name and
+          confidence percentage (e.g. "Myocardial Infarction (MI) — 53.4%").
+        * A "Lead: <name>" badge annotation in the top-left corner.
+        * A slim colorbar on the right labelled "Model Attention" with
+          Low / Mid / High tick labels.
+
+        The image is designed to be displayed as a **standalone result card**
+        in the mobile UI — it must NOT be layered on top of the original ECG
+        photo, because the waveform is already baked in.
+
         Args:
-            signal_array (np.ndarray): 1‑D numpy array of the raw ECG signal for one lead.
-            heatmap (np.ndarray): 1‑D numpy array of ``[0,1]`` saliency values
-                (output of ``generate_heatmap``).
-            lead_name (str): Human‑readable name for the lead (only used for
-                logging; not rendered on the plot). Defaults to "".
+            signal_array (np.ndarray): 1‑D numpy array of the raw ECG signal
+                for the selected lead (shape: ``(seq_length,)``).
+            heatmap (np.ndarray): 1‑D numpy array of ``[0, 1]`` saliency
+                values from ``generate_heatmap`` (shape: ``(seq_length,)``).
+            lead_name (str): Human‑readable lead identifier rendered as an
+                in-axes annotation (e.g. ``"V1"``, ``"aVL"``). Defaults to
+                ``""`` (no annotation rendered).
+            condition_label (str): Short model superclass label (e.g.
+                ``"MI"``, ``"HYP"``). Resolved to a full clinical name via
+                ``_CONDITION_DISPLAY`` and used in the figure title. Defaults
+                to ``""`` (no title rendered).
+            confidence (float): Predicted confidence score in ``[0, 1]``.
+                Rendered as a percentage in the figure title alongside the
+                condition name. Defaults to ``0.0``.
 
         Returns:
-            np.ndarray: An ``(H, W, 3)`` uint8 RGB image ready for PNG encoding.
+            np.ndarray: An ``(H, W, 3)`` uint8 RGB image ready for PNG
+                encoding and base64 transmission.
         """
+        # ── Y-axis range with padding ──────────────────────────────────────
         y_min: float = float(signal_array.min())
         y_max: float = float(signal_array.max())
         if y_max == y_min:
@@ -261,15 +300,23 @@ class GradCAM1D:
         y_min -= pad
         y_max += pad
 
+        # ── Figure setup ───────────────────────────────────────────────────
+        # Extra height (2.8 vs 2.0) accommodates the title row cleanly.
+        # Extra width (7.0 vs 6.0) provides space for the slim colorbar.
         fig: matplotlib.figure.Figure
         ax: matplotlib.axes.Axes
-        fig, ax = plt.subplots(figsize=(6, 2))
-        ax.plot(signal_array, color="black", linewidth=1.5)
+        fig, ax = plt.subplots(figsize=(7, 2.8))
 
-        # Tile the 1‑D heatmap so imshow can draw it over the full y‑range
+        # ── ECG waveform (drawn last so it sits above the heatmap) ─────────
+        ax.plot(signal_array, color="black", linewidth=1.5, zorder=3)
+
+        # ── Heatmap background ─────────────────────────────────────────────
+        # Tile the 1-D heatmap into 2-D so imshow fills the full y-range.
+        # vmin/vmax fixed to [0, 1] so the colorbar scale is always consistent
+        # regardless of the actual heatmap value range in this sample.
         heatmap_2d: np.ndarray = np.tile(heatmap.reshape(1, -1), (100, 1))
         extent: List[float] = [0, len(signal_array) - 1, y_min, y_max]
-        ax.imshow(
+        im = ax.imshow(
             heatmap_2d,
             extent=extent,
             aspect="auto",
@@ -277,15 +324,72 @@ class GradCAM1D:
             alpha=0.45,
             origin="lower",
             interpolation="bilinear",
+            vmin=0.0,
+            vmax=1.0,
+            zorder=2,
         )
         ax.set_axis_off()
-        fig.tight_layout(pad=0)
 
+        # ── Lead badge annotation (top-left, inside axes) ──────────────────
+        if lead_name:
+            ax.text(
+                0.01, 0.97,
+                f"Lead: {lead_name}",
+                transform=ax.transAxes,
+                fontsize=9,
+                fontweight="bold",
+                color="black",
+                va="top",
+                ha="left",
+                bbox=dict(
+                    boxstyle="round,pad=0.25",
+                    facecolor="white",
+                    alpha=0.80,
+                    edgecolor="none",
+                ),
+                zorder=4,
+            )
+
+        # ── Figure title: full condition name + confidence ──────────────────
+        if condition_label:
+            display_name: str = _CONDITION_DISPLAY.get(condition_label, condition_label)
+            title_str: str = (
+                f"{display_name} ({condition_label}) — {confidence * 100:.1f}%"
+                if confidence > 0.0
+                else f"{display_name} ({condition_label})"
+            )
+            fig.suptitle(
+                title_str,
+                fontsize=10,
+                fontweight="bold",
+                y=0.98,
+                ha="center",
+            )
+
+        # ── Colorbar: slim, right side, three-tick scale ────────────────────
+        cbar = fig.colorbar(
+            im,
+            ax=ax,
+            orientation="vertical",
+            fraction=0.025,
+            pad=0.02,
+            shrink=0.85,
+        )
+        cbar.set_label("Model Attention", fontsize=7, labelpad=4)
+        cbar.set_ticks([0.0, 0.5, 1.0])
+        cbar.set_ticklabels(["Low", "Mid", "High"], fontsize=6)
+        cbar.ax.tick_params(size=0)
+
+        # ── Render to numpy array ───────────────────────────────────────────
+        fig.tight_layout(pad=0.4)
         fig.canvas.draw()
-        buf: np.ndarray = np.asarray(fig.canvas.buffer_rgba())      # (H, W, 4)
-        rgb: np.ndarray = buf[..., :3].copy()                        # discard alpha
+        buf: np.ndarray = np.asarray(fig.canvas.buffer_rgba())   # (H, W, 4)
+        rgb: np.ndarray = buf[..., :3].copy()                     # discard alpha
         plt.close(fig)
 
         if lead_name:
-            logger.debug("Rendered Grad‑CAM overlay for lead %s.", lead_name)
+            logger.debug(
+                "Grad‑CAM overlay rendered for lead %s (condition=%s, confidence=%.3f).",
+                lead_name, condition_label, confidence,
+            )
         return rgb
