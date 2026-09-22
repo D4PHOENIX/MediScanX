@@ -508,20 +508,63 @@ class ECGPreprocessor:
                 (x_morph, x_rhythm, x_volt, signals_2d).
 
         Note:
-            ``x_volt`` is derived from the raw ``signals_2d`` array (the
-            optically-digitised waveform in normalised pixel units) **before**
-            z-score normalisation.  Using the z-scored ``morph_tensor``
-            would collapse all peak-to-peak amplitudes toward 1.0 (unit
-            variance) and strip out the clinically meaningful voltage signal.
+            ``process_image()`` returns z-score normalised signals, so calling
+            ``np.ptp`` on its ``signals_2d`` output would yield unit-variance
+            amplitudes — not meaningful voltage values.  This method therefore
+            runs the optical digitizer independently to obtain the raw
+            pixel-unit waveform before normalisation, and derives ``x_volt``
+            from that pre-normalised array.
         """
+        # 1. Run the full optical pipeline to get morph_tensor and
+        #    z-score normalised signals_2d for Grad-CAM.
         morph_tensor, signals_2d = self.process_image(
             image_path,
             diagnostic_mode=diagnostic_mode,
             diagnostic_out_dir=diagnostic_out_dir,
         )
 
-        # 2. Continuous Lead II rhythm strip interpolated from morph_tensor.
-        #    morph_tensor is (1, 12, seq_length); index into lead dimension.
+        # 2. Extract raw (pre-normalisation) pixel amplitudes for the voltage branch.
+        #    We re-run the modular digitizer here to get the unnormalised waveform.
+        #    If the modular digitizer is unavailable, fall back to signals_2d with a warning.
+        raw_signals_2d: Optional[np.ndarray] = None
+        img: Optional[np.ndarray] = cv2.imread(image_path)
+        if img is not None:
+            try:
+                from app.engine.digitizer import digitize_ecg
+                dig_res: dict = digitize_ecg(img)
+                if dig_res.get("ok") and dig_res.get("signals"):
+                    signals_dict: dict = dig_res["signals"]
+                    lead_order: List[str] = [
+                        'I', 'aVR', 'V1', 'V4',
+                        'II', 'aVL', 'V2', 'V5',
+                        'III', 'aVF', 'V3', 'V6',
+                    ]
+                    extracted: List[np.ndarray] = [
+                        np.asarray(signals_dict[l], dtype=np.float32).reshape(-1)
+                        for l in lead_order
+                        if l in signals_dict and len(signals_dict[l]) == self.cfg.seq_length
+                    ]
+                    if len(extracted) == self.cfg.num_leads:
+                        raw_signals_2d = np.stack(extracted, axis=0)  # (12, seq_length) raw pixel values
+            except Exception as exc:
+                logger.debug("Digitizer re-run for voltage extraction skipped: %s", exc)
+
+        if raw_signals_2d is None:
+            # Fallback: signals_2d is already z-scored; voltage values will be
+            # approximately unit-variance but preserve relative lead differences.
+            logger.warning(
+                "Could not obtain raw pixel amplitudes for voltage branch "
+                "(image path: %s). Falling back to z-scored signals_2d. "
+                "Voltage MLP predictions may be less accurate for image inputs.",
+                image_path,
+            )
+            raw_signals_2d = signals_2d
+
+        # 3. Voltage peak-to-peak amplitude from raw (unnormalised) pixel waveform.
+        volt_raw: np.ndarray = np.ptp(raw_signals_2d, axis=1).astype(np.float32)  # (12,)
+        volt_tensor: torch.Tensor = torch.tensor(volt_raw, dtype=torch.float32).unsqueeze(0)  # (1, 12)
+
+        # 4. Branch 2: Rhythm strip interpolated from normalised morph_tensor.
         lead_idx: int = getattr(self.cfg, "rhythm_lead_idx", 1)
         rhythm_seq_len: int = getattr(self.cfg, "rhythm_seq_length", 1000)
         if not (0 <= lead_idx < morph_tensor.shape[1]):
@@ -531,13 +574,7 @@ class ECGPreprocessor:
         lead2 = morph_tensor[:, lead_idx: lead_idx + 1, :]
         rhythm_tensor = F.interpolate(lead2, size=rhythm_seq_len, mode="linear", align_corners=False)
 
-        # 3. Voltage peak-to-peak amplitude vector.
-        #    IMPORTANT: use signals_2d (raw pixel-unit waveform, shape (12, seq_length))
-        #    NOT morph_tensor which has been z-score normalised and no longer carries
-        #    meaningful amplitude information.
-        volt_raw: np.ndarray = np.ptp(signals_2d, axis=1).astype(np.float32)  # (12,)
-        volt_tensor: torch.Tensor = torch.tensor(volt_raw, dtype=torch.float32).unsqueeze(0)  # (1, 12)
-
         return morph_tensor, rhythm_tensor, volt_tensor, signals_2d
+
 
 

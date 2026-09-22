@@ -137,23 +137,29 @@ class ECGDiagnosticEngine:
         volt_tensor: Optional[torch.Tensor] = None
         signal_array: np.ndarray
 
+        # Determine if PyTorch inference path will be used.
+        # Dual-branch preprocessing (rhythm + voltage extraction) is only
+        # needed for the PyTorch model — the ONNX model accepts only the
+        # morphology tensor and cannot consume the extra branches.
+        use_pytorch: bool = use_gradcam or self.onnx_session is None
+
         if input_type == 'wfdb':
-            if isinstance(self.preprocessor, ECGPreprocessor):
-                # Production path: full dual-branch extraction.
+            if use_pytorch and isinstance(self.preprocessor, ECGPreprocessor):
+                # Production PyTorch path: full dual-branch extraction.
                 res = self.preprocessor.process_wfdb_dualbranch(input_path)
             else:
-                # Test / mock path: legacy 2-tuple (tensor, signal_array).
+                # ONNX path or test/mock: legacy 2-tuple (tensor, signal_array).
                 res = self.preprocessor.process_wfdb(input_path)
 
         elif input_type == 'image':
-            if isinstance(self.preprocessor, ECGPreprocessor):
-                # Production path: full dual-branch extraction.
+            if use_pytorch and isinstance(self.preprocessor, ECGPreprocessor):
+                # Production PyTorch path: full dual-branch extraction.
                 res = self.preprocessor.process_image_dualbranch(
                     input_path,
                     diagnostic_mode=diagnostic_mode,
                 )
             else:
-                # Test / mock path: legacy 2-tuple (tensor, signal_array).
+                # ONNX path or test/mock: legacy 2-tuple (tensor, signal_array).
                 res = self.preprocessor.process_image(
                     input_path,
                     diagnostic_mode=diagnostic_mode,
@@ -185,10 +191,13 @@ class ECGDiagnosticEngine:
         # Validate signal array shape before entering the findings loop.
         # The per-finding Grad-CAM overlay lead is selected inside the loop
         # using _LABEL_TO_LEAD, so we only need a shape guard here.
-        if signal_array.ndim != 2 or signal_array.shape[0] != self.cfg.num_leads:
+        # Use morph_seq_length as the single source of truth for the morphology
+        # window; fall back to seq_length for backward compatibility.
+        expected_len: int = getattr(self.cfg, "morph_seq_length", self.cfg.seq_length)
+        if signal_array.ndim != 2 or signal_array.shape[0] != self.cfg.num_leads or signal_array.shape[1] != expected_len:
             raise ECGInferenceError(
                 f"Signal array has unexpected shape {signal_array.shape}; "
-                f"expected ({self.cfg.num_leads}, {self.cfg.seq_length})."
+                f"expected ({self.cfg.num_leads}, {expected_len})."
             )
 
         # ---- 2. Inference ----------------------------------------------------

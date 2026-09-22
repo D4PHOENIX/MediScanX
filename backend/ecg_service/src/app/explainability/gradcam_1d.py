@@ -230,15 +230,16 @@ class GradCAM1D:
         cam_max: torch.Tensor = cam.max()
         cam = (cam - cam_min) / (cam_max - cam_min + 1e-8)
 
-        # Interpolate to full sequence length
+        # Interpolate to morphology sequence length
+        target_len: int = getattr(self.cfg, "morph_seq_length", self.cfg.seq_length)
         cam_4d: torch.Tensor = cam.unsqueeze(1)                         # (1, 1, T)
         cam_4d = F.interpolate(
             cam_4d,
-            size=self.cfg.seq_length,
+            size=target_len,
             mode="linear",
             align_corners=False,
         )
-        cam_1d: torch.Tensor = cam_4d.squeeze(1).squeeze(0)             # (seq_length)
+        cam_1d: torch.Tensor = cam_4d.squeeze(1).squeeze(0)             # (target_len,)
 
         return cam_1d.detach().cpu().numpy().astype(np.float32)
 
@@ -291,6 +292,12 @@ class GradCAM1D:
             np.ndarray: An ``(H, W, 3)`` uint8 RGB image ready for PNG
                 encoding and base64 transmission.
         """
+        # ── Resample heatmap if its length diverges from signal_array ─────
+        if len(heatmap) != len(signal_array):
+            x_old: np.ndarray = np.linspace(0, 1, len(heatmap))
+            x_new: np.ndarray = np.linspace(0, 1, len(signal_array))
+            heatmap = np.interp(x_new, x_old, heatmap).astype(np.float32)
+
         # ── Y-axis range with padding ──────────────────────────────────────
         y_min: float = float(signal_array.min())
         y_max: float = float(signal_array.max())
