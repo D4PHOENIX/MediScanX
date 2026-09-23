@@ -55,6 +55,31 @@ async def _execute_with_retry(pool: Pool, query: str, records: List[Any], max_re
                 raise
 
 
+
+def _message_text(content: Any) -> str:
+    """Extracts concatenated plain text from a LangChain message content.
+
+    Args:
+        content: a LangChain message content, str or list of content blocks.
+
+    Returns:
+        the concatenated plain text of all text blocks.
+
+    Raises:
+        TypeError: for unsupported content types.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and item.get("type") == "text" and "text" in item:
+                parts.append(str(item["text"]))
+        return "".join(parts)
+    raise TypeError(f"Unsupported message content type: {type(content)}")
+
 async def sync_state_messages(
     pool: Pool,
     thread_id: str,
@@ -89,11 +114,11 @@ async def sync_state_messages(
 
         # 4. Append ONLY using the sanitized msg_id
         if isinstance(msg, HumanMessage):
-            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+            content = _message_text(msg.content)
             records.append((msg_id, thread_id, patient_id, True, content, "[]"))
 
         elif isinstance(msg, AIMessage) and not msg.tool_calls:
-            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+            content = _message_text(msg.content)
             if content.strip():
                 citations_json = json.dumps(citations) if citations else "[]"
                 records.append((msg_id, thread_id, patient_id, False, content, citations_json))
@@ -103,7 +128,7 @@ async def sync_state_messages(
 
     query = """
     INSERT INTO chat_messages (id, thread_id, patient_id, is_user, text, citations, created_at)
-    VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6::jsonb, NOW())
+    VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6::jsonb, clock_timestamp())
     ON CONFLICT (id) DO NOTHING
     """
 
