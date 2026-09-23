@@ -288,51 +288,60 @@ class ScansService:
                 )
 
             # Check existing care relationship
-            row = await conn.fetchrow(
-                "SELECT status, ended_at FROM care_relationships WHERE doctor_id = $1 AND patient_id = $2",
-                parse_uuid(caller_id, 'caller_id'),
-                parse_uuid(patient_id, 'patient_id')
-            )
-
             access_granted = False
             reason = None
             expires_at = datetime.now(timezone.utc) + timedelta(days=gateway_config.care_relationship_ttl_days)
+            doctor_uuid = parse_uuid(caller_id, 'caller_id')
+            patient_uuid = parse_uuid(patient_id, 'patient_id')
 
-            if row:
-                status = row["status"]
-                ended_at = row["ended_at"]
-
-                if ended_at is not None:
-                    logger.warning(f"Care relationship for {patient_id} and {caller_id} was ended at {ended_at}. Denying QR claim.")
-                    reason = "revoked"
-                elif status == "active":
-                    await conn.execute(
-                        "UPDATE care_relationships SET expires_at = $1 WHERE doctor_id = $2 AND patient_id = $3",
-                        expires_at, parse_uuid(caller_id, 'caller_id'), parse_uuid(patient_id, 'patient_id')
-                    )
-                    access_granted = True
-                elif status == "pending":
-                    await conn.execute(
-                        "UPDATE care_relationships SET status = 'active', activated_at = now(), expires_at = $1 WHERE doctor_id = $2 AND patient_id = $3",
-                        expires_at, parse_uuid(caller_id, 'caller_id'), parse_uuid(patient_id, 'patient_id')
-                    )
-                    access_granted = True
-                elif status == "revoked":
-                    reason = "revoked"
-                elif status == "declined":
-                    reason = "declined"
-                else:
-                    logger.warning(f"Unknown status {status} for care relationship between {patient_id} and {caller_id}.")
-                    reason = "unknown_status"
-            else:
-                await conn.execute(
+            async with conn.transaction():
+                live = await conn.fetchrow(
                     """
-                    INSERT INTO care_relationships (patient_id, doctor_id, status, initiated_by, note, created_at, activated_at, expires_at)
-                    VALUES ($1, $2, 'active', $3, 'QR claim', now(), now(), $4)
+                    SELECT id, status FROM care_relationships 
+                    WHERE doctor_id = $1 AND patient_id = $2 AND status IN ('pending','active')
                     """,
-                    parse_uuid(patient_id, 'patient_id'), parse_uuid(caller_id, 'caller_id'), parse_uuid(caller_id, 'caller_id'), expires_at
+                    doctor_uuid, patient_uuid
                 )
-                access_granted = True
+                
+                if live:
+                    if live["status"] == "active":
+                        await conn.execute(
+                            "UPDATE care_relationships SET expires_at = $1 WHERE id = $2",
+                            expires_at, live["id"]
+                        )
+                        access_granted = True
+                    elif live["status"] == "pending":
+                        await conn.execute(
+                            "UPDATE care_relationships SET status='active', activated_at=now(), expires_at=$1 WHERE id = $2",
+                            expires_at, live["id"]
+                        )
+                        access_granted = True
+                else:
+                    last = await conn.fetchrow(
+                        """
+                        SELECT status, ended_at FROM care_relationships
+                        WHERE doctor_id = $1 AND patient_id = $2 AND status IN ('revoked','declined')
+                        ORDER BY ended_at DESC NULLS FIRST, created_at DESC LIMIT 1
+                        """,
+                        doctor_uuid, patient_uuid
+                    )
+                    token_iat = payload.get("iat")
+                    
+                    if last and (token_iat is None or last["ended_at"] is None or datetime.fromtimestamp(token_iat, timezone.utc) <= last["ended_at"]):
+                        access_granted = False
+                        reason = last["status"]
+                    else:
+                        try:
+                            await conn.execute(
+                                """
+                                INSERT INTO care_relationships (patient_id, doctor_id, status, initiated_by, note, created_at, activated_at, expires_at)
+                                VALUES ($1, $2, 'active', $3, 'QR claim', now(), now(), $4)
+                                """,
+                                patient_uuid, doctor_uuid, doctor_uuid, expires_at
+                            )
+                            access_granted = True
+                        except asyncpg.UniqueViolationError:
+                            raise HTTPException(status_code=409, detail="Concurrent claim, please retry")
 
             patient_ref = f"PT-{patient_id[:6].upper()}"
 
