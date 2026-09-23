@@ -6,7 +6,7 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 from httpx import AsyncClient
 from langchain_core.runnables import RunnableConfig
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage
 from fastapi import HTTPException
 
 from app.api.routes import _assert_thread_owned
@@ -284,3 +284,45 @@ async def test_t15_unpatched_guard_owned(test_app, async_client, auth_headers):
     })
     assert response.status_code == 200
     assert captured_configs[0]["configurable"]["thread_id"] == target_thread_id
+
+@pytest.mark.asyncio
+async def test_t17_sync_message_text_extraction():
+    mock_conn = MagicMock()
+    mock_conn.executemany = AsyncMock()
+    mock_pool = FakePool(mock_conn)
+
+    # 1. str -> unchanged
+    await sync_state_messages(mock_pool, "t", "p", [HumanMessage(content="hello")])
+    assert mock_conn.executemany.call_args[0][1][0][4] == "hello"
+    mock_conn.executemany.reset_mock()
+
+    # 2. list with text blocks -> plain joined text
+    content_list = [
+        {"type": "text", "text": "block1 "},
+        "plain_string ",
+        {"type": "image_url", "image_url": "foo"},
+        {"type": "text", "text": "block2"}
+    ]
+    await sync_state_messages(mock_pool, "t", "p", [HumanMessage(content=content_list)])
+    assert mock_conn.executemany.call_args[0][1][0][4] == "block1 plain_string block2"
+    mock_conn.executemany.reset_mock()
+
+    # 3. list with only non-text blocks -> AI row skipped (since text is empty)
+    content_list_non_text = [{"type": "image_url", "image_url": "foo"}]
+    await sync_state_messages(mock_pool, "t", "p", [AIMessage(content=content_list_non_text)])
+    mock_conn.executemany.assert_not_called()
+
+    # 4. an int -> TypeError
+    with pytest.raises(TypeError):
+        await sync_state_messages(mock_pool, "t", "p", [HumanMessage.construct(content=123)])
+
+@pytest.mark.asyncio
+async def test_t18_sync_state_messages_clock_timestamp():
+    mock_conn = MagicMock()
+    mock_conn.executemany = AsyncMock()
+    mock_pool = FakePool(mock_conn)
+
+    await sync_state_messages(mock_pool, "t", "p", [HumanMessage(content="hello")])
+    query = mock_conn.executemany.call_args[0][0]
+    assert "clock_timestamp()" in query
+    assert "NOW()" not in query
