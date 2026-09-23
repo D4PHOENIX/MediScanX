@@ -28,6 +28,7 @@ class ChatRequest(BaseModel):
     current_scan_id: Optional[UUID] = None
     execution_step: str = ""
     multimodal_metadata: Dict[str, Any] = Field(default_factory=dict)
+    thread_id: Optional[UUID] = None
 
 
 # ---------------------------------------------------------------------------

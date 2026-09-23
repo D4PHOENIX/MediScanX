@@ -110,7 +110,7 @@ async def test_app():
             acquire_ctx = MagicMock()
             acquire_ctx.__aenter__ = AsyncMock()
             mock_conn = MagicMock()
-            mock_conn.fetchval = AsyncMock(return_value=1)
+            mock_conn.fetchval = AsyncMock(return_value=False)
             acquire_ctx.__aenter__.return_value = mock_conn
             acquire_ctx.__aexit__ = AsyncMock()
             mock_pool_obj.acquire.return_value = acquire_ctx

@@ -154,6 +154,25 @@ def _should_continue(state: AgentState) -> str:
 # 
 #  Factory — called once during FastAPI lifespan startup
 # 
+async def _sync_powersync_node(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
+    """Extract final user and AI messages and synchronise them to the PowerSync flat table.
+
+    Parses tool call results from the message history to identify RAG
+    citation metadata, then delegates persistence to the PowerSync
+    data-extraction layer.
+    """
+    messages = state["messages"]
+    configurable = config.get("configurable", {})
+    thread_id = configurable.get("thread_id")
+    db_pool = configurable.get("db_pool")
+    patient_id = state.get("patient_id")
+    if not patient_id: raise ValueError("sync_powersync: patient_id missing from state")
+    if not thread_id:  raise RuntimeError("sync_powersync: thread_id missing from config")
+    if not db_pool:    raise RuntimeError("sync_powersync: db_pool missing from config")
+    citations = _extract_citations_from_messages(messages)
+    await sync_state_messages(db_pool, thread_id, patient_id, messages, citations)
+    return {}
+
 @asynccontextmanager
 async def build_graph(
     gemini_api_key: Optional[str],
@@ -255,25 +274,6 @@ async def build_graph(
 
         builder.add_node("agent", _call_model_bound)
         builder.add_node("tools", ToolNode(TOOLS))
-    
-        async def _sync_powersync_node(state: AgentState, config: RunnableConfig) -> Dict[str, Any]:
-            """Extract final user and AI messages and synchronise them to the PowerSync flat table.
-
-            Parses tool call results from the message history to identify RAG
-            citation metadata, then delegates persistence to the PowerSync
-            data-extraction layer.
-            """
-            messages = state["messages"]
-            thread_id = config.get("configurable", {}).get("thread_id")
-            db_pool = config.get("configurable", {}).get("db_pool")
-            patient_id = state.get("patient_id") or thread_id
-
-            if thread_id and db_pool:
-                # Extract citation data from tool messages in the conversation
-                citations = _extract_citations_from_messages(messages)
-                await sync_state_messages(db_pool, thread_id, patient_id, messages, citations)
-            return {}
-        
         builder.add_node("sync_powersync", _sync_powersync_node)
 
         builder.set_entry_point("agent")

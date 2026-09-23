@@ -52,6 +52,7 @@ async def _execute_with_retry(pool: Pool, query: str, records: List[Any], max_re
                 logger.error(
                     "PowerSync sync failed after %d attempts: %s", max_retries, exc,
                 )
+                raise
 
 
 async def sync_state_messages(
