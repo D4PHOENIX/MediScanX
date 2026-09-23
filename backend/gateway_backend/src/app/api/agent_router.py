@@ -1,6 +1,7 @@
 """SSE streaming proxy for the LangGraph agent powered by Agentic AI Orchestrator."""
 
 import logging
+import json
 from typing import AsyncGenerator, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -78,6 +79,18 @@ async def chat_with_agent(
             response.status_code,
             error_body.decode("utf-8", errors="replace")[:512],
         )
+        
+        
+        if 400 <= response.status_code < 500:
+            try:
+                detail = json.loads(error_body).get("detail")
+            except Exception:
+                detail = error_body.decode("utf-8", errors="replace")
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=detail
+            )
+            
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Upstream service returned error: {response.status_code}"
