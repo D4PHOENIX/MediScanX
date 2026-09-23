@@ -8,7 +8,8 @@ patient history, and orchestrated conversational exchanges.
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+import uuid
+from pydantic import BaseModel, Field, field_validator
 
 
 class ExplainabilityInfo(BaseModel):
@@ -133,6 +134,17 @@ class ChatRequest(BaseModel):
     current_scan_id: str = Field(default="")
     execution_step: str = Field(default="")
     multimodal_metadata: Dict[str, Any] = Field(default_factory=dict)
+    thread_id: Optional[str] = None
+
+    @field_validator("thread_id", mode="before")
+    @classmethod
+    def validate_thread_id(cls, v: Any) -> Optional[str]:
+        if v is None:
+            return None
+        try:
+            return str(uuid.UUID(str(v))).lower()
+        except ValueError:
+            raise ValueError("thread_id must be a valid UUID")
 
 
 class ScanSyncResponse(BaseModel):
