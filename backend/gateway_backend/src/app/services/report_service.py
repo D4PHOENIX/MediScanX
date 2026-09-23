@@ -253,12 +253,14 @@ class ReportGenerator:
 
         # 2. Build the JWT token and the final QR image encoding the claim URL
         from jose import jwt
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
 
+        now = datetime.now(timezone.utc)
         token_payload = {
             "sub": patient_id,
             "scan_ids": [m.get("id") for m in scan_metadata],
-            "exp": datetime.utcnow() + timedelta(hours=1),
+            "iat": now,
+            "exp": now + timedelta(hours=1),
             "purpose": "report_claim"
         }
         token = jwt.encode(token_payload, gateway_config.report_token_secret, algorithm="HS256")
