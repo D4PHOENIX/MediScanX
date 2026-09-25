@@ -85,8 +85,15 @@ class ECGEngine:
         # 2. PyTorch model (fallback & Grad-CAM) -------------------------------
         ckpt_path: Path = Path(self.cfg.pytorch_ckpt_path)
         if not ckpt_path.exists():
-            from app.core.exceptions import ECGModelNotFoundError
-            raise ECGModelNotFoundError(path=str(ckpt_path))
+            local_candidate = Path("weights") / ckpt_path.name
+            project_root_candidate = Path(__file__).resolve().parents[3] / "weights" / ckpt_path.name
+            if local_candidate.exists():
+                ckpt_path = local_candidate
+            elif project_root_candidate.exists():
+                ckpt_path = project_root_candidate
+            else:
+                from app.core.exceptions import ECGModelNotFoundError
+                raise ECGModelNotFoundError(path=str(ckpt_path))
 
         try:
             self._model = ECGClassifier.from_checkpoint(

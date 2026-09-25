@@ -3,7 +3,7 @@
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional, Union
 
 import cv2
 import numpy as np
@@ -150,14 +150,19 @@ class _WaveformDigitizer:
         """
         self.cfg: Settings = cfg
 
-    def extract_1d_signal(self, lead_img: np.ndarray) -> Tuple[Optional[np.ndarray], float, bool]:
+    def extract_1d_signal(
+        self,
+        lead_img: np.ndarray,
+        return_raw: bool = False,
+    ) -> Union[Tuple[Optional[np.ndarray], float, bool], Tuple[Optional[np.ndarray], Optional[np.ndarray], float, bool]]:
         """Extract a 1D signal from a binary slice of a lead.
 
         Args:
             lead_img (np.ndarray): Sliced image for a specific lead.
+            return_raw (bool): If True, returns (normalised, raw_waveform, coverage, span_failed).
 
         Returns:
-            Tuple[Optional[np.ndarray], float, bool]: The normalised 1D signal array (or None if failed), fractional coverage, and boolean flag if span fails.
+            Tuple: The normalised 1D signal array (or None if failed), raw waveform if requested, coverage, and span flag.
         """
         height: int
         width: int
@@ -171,7 +176,7 @@ class _WaveformDigitizer:
         coverage: float = float(np.sum(valid_cols) / width)
         
         if np.sum(valid_cols) < 2:
-            return None, coverage, True
+            return (None, None, coverage, True) if return_raw else (None, coverage, True)
 
         y_sums: np.ndarray = np.bincount(x_indices, weights=y_indices, minlength=width)
         y_centers: np.ndarray = y_sums[valid_cols] / col_counts[valid_cols]
@@ -185,7 +190,7 @@ class _WaveformDigitizer:
         
         # Genuine span check: reject if the trace spans less than 50% of the box width
         if span_fraction < 0.5:
-            return None, coverage, True
+            return (None, None, coverage, True) if return_raw else (None, coverage, True)
 
         eval_x: np.ndarray = np.linspace(x_min, x_max, int(x_max - x_min + 1), dtype=np.float32)
         interpolator: interp1d = interp1d(valid_x_arr, raw, kind='linear')
@@ -196,6 +201,8 @@ class _WaveformDigitizer:
         mean_val: np.float64 = np.mean(resampled)
         std_val: np.float64 = np.std(resampled) + 1e-8
         normalised: np.ndarray = (resampled - mean_val) / std_val
+        if return_raw:
+            return normalised.astype(np.float32), resampled.astype(np.float32), coverage, False
         return normalised.astype(np.float32), coverage, False
 
 
@@ -374,17 +381,20 @@ class ECGPreprocessor:
         image_path: str,
         diagnostic_mode: bool = False,
         diagnostic_out_dir: Optional[str] = None,
-    ) -> Tuple[torch.Tensor, np.ndarray]:
+        return_raw: bool = False,
+    ) -> Union[Tuple[torch.Tensor, np.ndarray], Tuple[torch.Tensor, np.ndarray, Optional[np.ndarray]]]:
         """Run the full optical pipeline on a scanned ECG image.
 
         Args:
             image_path (str): Path to the scanned image.
             diagnostic_mode (bool): Whether to output intermediate images.
             diagnostic_out_dir (Optional[str]): Output directory for diagnostic files.
+            return_raw (bool): If True, returns (tensor, signals_2d, raw_signals_2d).
 
         Returns:
             Tuple[torch.Tensor, np.ndarray]: A tuple containing the tensor
                 of shape ``(1, 12, 250)`` and raw signal array of shape ``(12, 250)``.
+                If return_raw is True, returns (tensor, signals_2d, raw_signals_2d).
 
         Raises:
             SignalProcessingError: If optical extraction fails.
@@ -410,17 +420,20 @@ class ECGPreprocessor:
                     extracted_list: List[np.ndarray] = []
                     for lname in lead_order:
                         sig: Optional[np.ndarray] = signals_dict.get(lname)
-                        if sig is not None and len(sig) == self.cfg.seq_length:
-                            extracted_list.append(sig)
+                        if sig is not None:
+                            sig_arr = np.asarray(sig, dtype=np.float32).reshape(-1)
+                            if len(sig_arr) == self.cfg.seq_length:
+                                extracted_list.append(sig_arr)
+                            elif len(sig_arr) > 0:
+                                extracted_list.append(resample(sig_arr, self.cfg.seq_length).astype(np.float32))
                     if len(extracted_list) == self.cfg.num_leads:
-                        signals_2d: np.ndarray = np.stack(
-                            [np.asarray(s, dtype=np.float32).reshape(-1) for s in extracted_list],
-                            axis=0,
-                        )
-                        mean = signals_2d.mean(axis=1, keepdims=True)
-                        std = signals_2d.std(axis=1, keepdims=True) + 1e-8
-                        signals_2d = ((signals_2d - mean) / std).astype(np.float32)
+                        raw_signals_2d: np.ndarray = np.stack(extracted_list, axis=0).astype(np.float32)
+                        mean = raw_signals_2d.mean(axis=1, keepdims=True)
+                        std = raw_signals_2d.std(axis=1, keepdims=True) + 1e-8
+                        signals_2d = ((raw_signals_2d - mean) / std).astype(np.float32)
                         tensor: torch.Tensor = torch.tensor(signals_2d, dtype=torch.float32).unsqueeze(0)
+                        if return_raw:
+                            return tensor, signals_2d, raw_signals_2d
                         return tensor, signals_2d
             except Exception as exc:
                 logger.debug(f"Modular digitizer path skipped: {exc}")
@@ -441,6 +454,7 @@ class ECGPreprocessor:
             'III', 'aVF', 'V3', 'V6',
         ]
         signals_list: List[np.ndarray] = []
+        raw_signals_list: List[np.ndarray] = []
         lead_name: str
         coverages: Dict[str, float] = {}
         span_failures: Dict[str, bool] = {}
@@ -453,7 +467,12 @@ class ECGPreprocessor:
             signal_1d: Optional[np.ndarray]
             cov: float
             span_failed: bool
-            signal_1d, cov, span_failed = self._digitizer.extract_1d_signal(lead_img)
+            if return_raw:
+                signal_1d, raw_1d, cov, span_failed = self._digitizer.extract_1d_signal(lead_img, return_raw=True)
+                if raw_1d is not None:
+                    raw_signals_list.append(raw_1d)
+            else:
+                signal_1d, cov, span_failed = self._digitizer.extract_1d_signal(lead_img)
             
             if signal_1d is not None:
                 signals_list.append(signal_1d)
@@ -488,6 +507,9 @@ class ECGPreprocessor:
             raise SignalLengthMismatchError(f"Expected length {self.cfg.seq_length}, got {signals_2d.shape[1]}")
 
         tensor: torch.Tensor = torch.tensor(signals_2d, dtype=torch.float32).unsqueeze(0)
+        if return_raw:
+            raw_2d = np.stack(raw_signals_list, axis=0).astype(np.float32) if len(raw_signals_list) == self.cfg.num_leads else None
+            return tensor, signals_2d, raw_2d
         return tensor, signals_2d
 
     def process_image_dualbranch(
@@ -506,48 +528,20 @@ class ECGPreprocessor:
         Returns:
             Tuple[torch.Tensor, torch.Tensor, torch.Tensor, np.ndarray]:
                 (x_morph, x_rhythm, x_volt, signals_2d).
-
-        Note:
-            ``process_image()`` returns z-score normalised signals, so calling
-            ``np.ptp`` on its ``signals_2d`` output would yield unit-variance
-            amplitudes — not meaningful voltage values.  This method therefore
-            runs the optical digitizer independently to obtain the raw
-            pixel-unit waveform before normalisation, and derives ``x_volt``
-            from that pre-normalised array.
         """
-        # 1. Run the full optical pipeline to get morph_tensor and
-        #    z-score normalised signals_2d for Grad-CAM.
-        morph_tensor, signals_2d = self.process_image(
+        # 1. Run the optical pipeline to get morph_tensor, signals_2d for Grad-CAM,
+        #    and raw (pre-normalisation) pixel waveforms for the voltage branch.
+        res = self.process_image(
             image_path,
             diagnostic_mode=diagnostic_mode,
             diagnostic_out_dir=diagnostic_out_dir,
+            return_raw=True,
         )
-
-        # 2. Extract raw (pre-normalisation) pixel amplitudes for the voltage branch.
-        #    We re-run the modular digitizer here to get the unnormalised waveform.
-        #    If the modular digitizer is unavailable, fall back to signals_2d with a warning.
-        raw_signals_2d: Optional[np.ndarray] = None
-        img: Optional[np.ndarray] = cv2.imread(image_path)
-        if img is not None:
-            try:
-                from app.engine.digitizer import digitize_ecg
-                dig_res: dict = digitize_ecg(img)
-                if dig_res.get("ok") and dig_res.get("signals"):
-                    signals_dict: dict = dig_res["signals"]
-                    lead_order: List[str] = [
-                        'I', 'aVR', 'V1', 'V4',
-                        'II', 'aVL', 'V2', 'V5',
-                        'III', 'aVF', 'V3', 'V6',
-                    ]
-                    extracted: List[np.ndarray] = [
-                        np.asarray(signals_dict[l], dtype=np.float32).reshape(-1)
-                        for l in lead_order
-                        if l in signals_dict and len(signals_dict[l]) == self.cfg.seq_length
-                    ]
-                    if len(extracted) == self.cfg.num_leads:
-                        raw_signals_2d = np.stack(extracted, axis=0)  # (12, seq_length) raw pixel values
-            except Exception as exc:
-                logger.debug("Digitizer re-run for voltage extraction skipped: %s", exc)
+        if len(res) == 3:
+            morph_tensor, signals_2d, raw_signals_2d = res
+        else:
+            morph_tensor, signals_2d = res
+            raw_signals_2d = None
 
         if raw_signals_2d is None:
             # Fallback: signals_2d is already z-scored; voltage values will be
@@ -560,11 +554,11 @@ class ECGPreprocessor:
             )
             raw_signals_2d = signals_2d
 
-        # 3. Voltage peak-to-peak amplitude from raw (unnormalised) pixel waveform.
+        # 2. Voltage peak-to-peak amplitude from raw (unnormalised) pixel waveform.
         volt_raw: np.ndarray = np.ptp(raw_signals_2d, axis=1).astype(np.float32)  # (12,)
         volt_tensor: torch.Tensor = torch.tensor(volt_raw, dtype=torch.float32).unsqueeze(0)  # (1, 12)
 
-        # 4. Branch 2: Rhythm strip interpolated from normalised morph_tensor.
+        # 3. Branch 2: Rhythm strip interpolated from normalised morph_tensor.
         lead_idx: int = getattr(self.cfg, "rhythm_lead_idx", 1)
         rhythm_seq_len: int = getattr(self.cfg, "rhythm_seq_length", 1000)
         if not (0 <= lead_idx < morph_tensor.shape[1]):
