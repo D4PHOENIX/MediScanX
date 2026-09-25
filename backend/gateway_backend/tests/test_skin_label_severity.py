@@ -37,9 +37,6 @@ _SKIN_MODEL_CLASSES = {
 }
 
 
-# ---------------------------------------------------------------------------
-# FIX 1 — Label set integrity
-# ---------------------------------------------------------------------------
 
 class TestSkinLabelSets:
     """The union of normal + abnormal skin labels must exactly equal the model's class list."""
@@ -83,10 +80,6 @@ class TestSkinLabelSets:
     def test_normal_skin_not_in_abnormal(self):
         assert "Normal skin" not in _ABNORMAL_LABELS["skin"]
 
-
-# ---------------------------------------------------------------------------
-# FIX 1+2 — derive_scan_status parametrized over every skin class
-# ---------------------------------------------------------------------------
 
 # Classes that should resolve to status 0 (Normal/healthy)
 SKIN_NORMAL_CLASSES = [
@@ -141,11 +134,6 @@ def test_skin_dermatofibroma_warning():
         0.70, ai_diagnosis="Dermatofibroma", modality="skin"
     )
     assert status == 1
-
-
-# ---------------------------------------------------------------------------
-# FIX 2 — Unknown labels must raise, not silently return 0 or 1
-# ---------------------------------------------------------------------------
 
 class TestUnknownLabelRejection:
     """Unrecognised labels must raise HTTP 500 for all modalities."""
