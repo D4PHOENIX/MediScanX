@@ -199,7 +199,7 @@ async def test_ecg_xai_false(auth_headers) -> None:
     mock_response = MagicMock(spec=Response)
     mock_response.status_code = 200
     mock_response.json.return_value = {
-        "predicted_class": "Normal",
+        "predicted_class": "NORM",
         "confidence": 0.95
     }
     mock_client.post.return_value = mock_response
@@ -349,8 +349,8 @@ async def test_ecg_no_overlays(auth_headers) -> None:
     mock_response = MagicMock(spec=Response)
     mock_response.status_code = 200
     mock_response.json.return_value = {
-        "predicted_class": "Normal",
-        "predictions": [{"label": "Normal", "confidence": 0.99, "class_idx": 0}],
+        "predicted_class": "NORM",
+        "predictions": [{"label": "NORM", "confidence": 0.99, "class_idx": 0}],
     }
     mock_client.post.return_value = mock_response
     app.state.http_client = mock_client
@@ -556,9 +556,9 @@ async def test_ecg_frontend_contract_alignment(auth_headers) -> None:
     mock_response = MagicMock(spec=Response)
     mock_response.status_code = 200
     mock_response.json.return_value = {
-        "predicted_class": "Atrial Fibrillation",
+        "predicted_class": "CD",
         "confidence": 0.98,
-        "predictions": [{"label": "Atrial Fibrillation", "confidence": 0.98}]
+        "predictions": [{"label": "CD", "confidence": 0.98}]
     }
     mock_client.post.return_value = mock_response
     app.state.http_client = mock_client
@@ -582,8 +582,8 @@ async def test_ecg_frontend_contract_alignment(auth_headers) -> None:
 
         assert "top_findings" in data
         assert "predictions" not in data
-        assert data["top_findings"] == [{"label": "Atrial Fibrillation", "confidence": 0.98}]
-        assert data["ai_diagnosis"] == "Atrial Fibrillation"
+        assert data["top_findings"] == [{"label": "CD", "confidence": 0.98}]
+        assert data["ai_diagnosis"] == "CD"
         assert "scan_status" in data
 
 

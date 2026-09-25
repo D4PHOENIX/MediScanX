@@ -371,17 +371,19 @@ def test_unrecognised_label_excluded(app_state_override):
 
 
 def test_findings_summary_exact_string(app_state_override):
-    """CXR Enlarged Cardiomediastinum 0.9173 + skin Melanocytic nevi 0.9953
+    """CXR Enlarged Cardiomediastinum 0.9173 + skin Normal skin 0.9953
     must produce the exact findings_summary string from the spec, and
     overall_risk_score must equal 0.5003, risk_level 'MODERATE',
-    critical_alert False — verified through this endpoint, not just the tool."""
+    critical_alert False — verified through this endpoint, not just the tool.
+    (Melanocytic nevi was previously used here but is now classified as abnormal;
+    Normal skin is the correct normal skin class after the label fix.)"""
     cxr_id = str(uuid.uuid4())
     skin_id = str(uuid.uuid4())
 
     pool, _ = _make_pool_with_fetch(
         fetch_return=[
             _make_row("cxr", "Enlarged Cardiomediastinum", 0.9173),
-            _make_row("skin", "Melanocytic nevi", 0.9953),
+            _make_row("skin", "Normal skin", 0.9953),
         ]
     )
     app.state.db_pool = pool
@@ -399,7 +401,7 @@ def test_findings_summary_exact_string(app_state_override):
     # Exact findings_summary string
     expected_summary = (
         "CXR: Enlarged Cardiomediastinum (abnormal, 91.7%). "
-        "SKIN: Melanocytic nevi (normal, 99.5%)."
+        "SKIN: Normal skin (normal, 99.5%)."
     )
     assert data["findings_summary"] == expected_summary
 
@@ -555,7 +557,7 @@ def test_clinical_correlation_1_abnormal_1_normal(app_state_override, mock_gener
     pool, _ = _make_pool_with_fetch(
         fetch_return=[
             _make_row("cxr", "Enlarged Cardiomediastinum", 0.90),
-            _make_row("ecg", "Normal", 0.90),
+            _make_row("ecg", "NORM", 0.90),
         ]
     )
     app.state.db_pool = pool
