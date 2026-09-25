@@ -52,11 +52,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         config_settings: Settings = Settings()
         # Build the domain dataclass expected by the internal diagnostic engine
+        raw_weights_path = getattr(config_settings, "skin_weights_path", "./weights/skin_multidomain_weights.pth")
+        resolved_weights_path = raw_weights_path
+        if not Path(raw_weights_path).exists():
+            container_path = Path("/weights") / Path(raw_weights_path).name
+            if container_path.exists():
+                resolved_weights_path = str(container_path)
+
         skin_inference_config: SkinInferenceConfig = SkinInferenceConfig(
-            model_weights_path=getattr(config_settings, "skin_weights_path", "./weights/mobilenet_v3.pth"),
+            model_weights_path=resolved_weights_path,
             device=torch.device(getattr(config_settings, "device", "cpu")),
             image_size=(getattr(config_settings, "image_size", 224), getattr(config_settings, "image_size", 224)),
-            num_classes=getattr(config_settings, "num_classes", 7),
+            num_classes=getattr(config_settings, "num_classes", 8),
+            melanoma_triage_threshold=getattr(config_settings, "melanoma_triage_threshold", 0.20),
+            enable_otsu_roi=getattr(config_settings, "enable_otsu_roi", True),
         )
         # Construct the engine with the domain configuration dataclass, which
         # will be forwarded to the internal SkinDiagnosticEngine.

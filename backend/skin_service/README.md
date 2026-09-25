@@ -2,7 +2,7 @@
 
 ## Domain Summary
 
-The Skin Service is a production-grade microservice for **MobileNetV3 Lesion inference**. It utilizes a specialized MobileNetV3 backbone optimized for 7-class dermatological lesion classification (e.g., Actinic keratoses, Basal cell carcinoma, Melanoma). The service provides high-performance, asynchronous diagnostics coupled with Grad-CAM visual explainability to assist medical professionals in identifying skin anomalies.
+The Skin Service is a production-grade microservice for **multi-domain skin lesion and healthy skin inference**. It utilizes an **EfficientNet-B0** backbone trained across HAM10000 (dermoscopy), PAD-UFES-20 (smartphone clinical macro photography), and unlesioned healthy skin controls for **8-class** dermatological classification (Actinic keratoses, Basal cell carcinoma, Benign keratosis, Dermatofibroma, Melanoma, Normal skin, Melanocytic nevi, Vascular lesion). The service features an automated Otsu adaptive saliency ROI preprocessor, a two-stage oncology safety triage engine ($P(\text{mel}) \ge 0.20 \rightarrow \text{URGENT\_REFERRAL}$), and Grad-CAM visual explainability.
 
 ## Quickstart: Local Reproducibility (using `uv run`)
 
@@ -51,17 +51,20 @@ The service exposes a multipart endpoint `/predict` for skin lesion analysis.
 
 ### Output JSON Payload Schema
 
-| Field                         | Type     | Description                                                                |
-| ----------------------------- | -------- | -------------------------------------------------------------------------- |
-| `original_img`                | `string` | Base64-encoded PNG representation of the original image.                   |
-| `top_findings`                | `array`  | List of top-k classification predictions.                                  |
-| `top_findings[].label`        | `string` | Full clinical name of the predicted class (e.g., "Melanoma").              |
-| `top_findings[].abbreviation` | `string` | ISIC abbreviation code (e.g., "mel").                                      |
-| `top_findings[].class_idx`    | `int`    | Internal integer index of the predicted class (0-6).                       |
-| `top_findings[].confidence`   | `float`  | Softmax probability score.                                                 |
-| `top_findings[].overlay_img`  | `string` | Base64-encoded PNG of the Grad-CAM heatmap overlaid on the original image. |
-| `predicted_class`             | `string` | The highest confidence clinical label prediction.                          |
-| `patient_id`                  | `string` | Parsed from the incoming file name (for correlation).                      |
+| Field                         | Type      | Description                                                                 |
+| ----------------------------- | --------- | --------------------------------------------------------------------------- |
+| `original_img`                | `string`  | Base64-encoded PNG representation of the original image (or ROI crop).      |
+| `top_findings`                | `array`   | List of top-k classification predictions.                                   |
+| `top_findings[].label`        | `string`  | Full clinical name of the predicted class (e.g., "Melanoma", "Normal skin"). |
+| `top_findings[].abbreviation` | `string`  | ISIC / clinical abbreviation code (e.g., "mel", "normal").                  |
+| `top_findings[].class_idx`    | `int`     | Internal integer index of the predicted class (0-7).                        |
+| `top_findings[].confidence`   | `float`   | Softmax probability score.                                                  |
+| `top_findings[].overlay_img`  | `string`  | Base64-encoded PNG of the Grad-CAM heatmap overlaid on the original image.  |
+| `predicted_class`             | `string`  | The highest confidence clinical label prediction.                           |
+| `patient_id`                  | `string`  | Parsed from the incoming file name (for correlation).                       |
+| `triage_level`                | `string`  | Clinical triage level: `URGENT_REFERRAL`, `SPECIALIST_REVIEW`, `HEALTHY_SKIN`, `ROUTINE_MONITORING`. |
+| `melanoma_alert`              | `boolean` | Flag set to `true` whenever $P(\text{mel}) \ge 0.20$ safety threshold is triggered. |
+| `clinical_note`               | `string`  | Clinical recommendation rationale for the patient and healthcare provider. |
 
 ## Custom Error Mapping Framework
 

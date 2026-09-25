@@ -11,7 +11,7 @@ from app.core.config import SkinInferenceConfig
 from app.engine.diagnostic_engine import SkinDiagnosticEngine
 from app.engine.preprocessor import SkinPreprocessor
 from app.explainability.gradcam import SkinGradCAM
-from app.models.mobilenet_v3 import SkinClassifier
+from app.models.efficientnet_b0 import EfficientNetB0Classifier, SkinClassifier
 
 
 class SkinEngine:
@@ -23,11 +23,7 @@ class SkinEngine:
     """
 
     def __init__(self, cfg: Optional[SkinInferenceConfig] = None) -> None:
-        """Initializes the SkinEngine with an optional configuration.
-
-        Args:
-            cfg (Optional[SkinInferenceConfig], optional): Configuration settings for the engine. Defaults to None.
-        """
+        """Initializes the SkinEngine with an optional configuration."""
         self.cfg: SkinInferenceConfig = cfg or SkinInferenceConfig()
         self._model: Optional[torch.nn.Module] = None
         self._diagnostic_engine: Optional[SkinDiagnosticEngine] = None
@@ -40,16 +36,12 @@ class SkinEngine:
         self.ready = True
 
     def _load(self) -> None:
-        """Synchronous loading executed inside an executor thread.
-
-        Raises:
-            SkinModelNotFoundError: If the specified model weights file does not exist.
-        """
+        """Synchronous loading executed inside an executor thread."""
         weights_path: Path = Path(self.cfg.model_weights_path)
         if not weights_path.exists():
             raise SkinModelNotFoundError(path=str(weights_path))
 
-        model: torch.nn.Module = SkinClassifier.from_weights(str(weights_path), self.cfg)
+        model: torch.nn.Module = EfficientNetB0Classifier.from_weights(str(weights_path), self.cfg)
 
         preprocessor: SkinPreprocessor = SkinPreprocessor(self.cfg)
         xai_engine: SkinGradCAM = SkinGradCAM(
@@ -61,21 +53,11 @@ class SkinEngine:
             self.cfg, model, preprocessor, xai_engine
         )
         self._model = model
+
     async def predict(
         self, image_path: str, top_k: int = 3, use_gradcam: bool = True
     ) -> Dict[str, Any]:
-        """Run a full diagnostic pass asynchronously on a given image.
-
-        Args:
-            image_path (str): The file path to the input image for prediction.
-            top_k (int, optional): The number of top predictions to return. Defaults to 3.
-
-        Returns:
-            Dict[str, Any]: A dictionary containing the original image, findings, predicted class, and patient ID.
-
-        Raises:
-            RuntimeError: If the engine has not been initialized before calling predict.
-        """
+        """Run a full diagnostic pass asynchronously on a given image."""
         if not self.ready or self._diagnostic_engine is None:
             raise RuntimeError(
                 "SkinEngine is not initialised – call await engine.initialize() first"

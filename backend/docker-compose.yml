@@ -95,7 +95,7 @@ services:
         ports:
             - "127.0.0.1:8003:8003"
         environment:
-            - SKIN_WEIGHTS_PATH=${SKIN_WEIGHTS_PATH:-/weights/skin_weights.pt}
+            - SKIN_WEIGHTS_PATH=${SKIN_WEIGHTS_PATH:-/weights/skin_multidomain_weights.pth}
         volumes:
             - ./skin_service/weights:/weights
         networks:
