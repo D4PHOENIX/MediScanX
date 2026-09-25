@@ -11,6 +11,7 @@ import logging
 from typing import Any, Dict, Optional
 
 import asyncpg
+from fastapi import HTTPException, status
 
 from app.utils.labels import _ABNORMAL_LABELS, _NORMAL_LABELS
 
@@ -46,22 +47,30 @@ class ScanPersistenceService:
             modality: The scanning modality (e.g., 'cxr', 'ecg', 'skin').
 
         Returns:
-            int: 2 (High Risk), 1 (Warning), or 0 (Normal).
+            int: 2 (High Risk), 1 (Warning), or 0 (Normal). Abnormal labels map to 1 or 2, never 0.
+
+        Raises:
+            HTTPException 500: If ``ai_diagnosis`` is not in the known label set
+                for the given ``modality``. An unrecognised label must never be
+                silently persisted as healthy (status 0).
         """
         if not ai_diagnosis or not modality:
             return 1
-            
+
         if ai_diagnosis in _NORMAL_LABELS.get(modality, set()):
             return 0
-            
+
         if ai_diagnosis in _ABNORMAL_LABELS.get(modality, set()):
             if confidence >= _HIGH_RISK_THRESHOLD:
                 return 2  # High Risk
             if confidence >= _WARNING_THRESHOLD:
                 return 1  # Warning
-            return 0  # Normal
-            
-        return 1
+            return 1  # Abnormal finding (low confidence) -> 1
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Unrecognised model label '{ai_diagnosis}' for modality '{modality}'"
+        )
 
     @staticmethod
     async def insert_scan_result(
