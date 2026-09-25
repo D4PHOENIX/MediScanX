@@ -220,6 +220,13 @@ async def skin_predict(
             confidence, ai_diagnosis=ai_diagnosis, modality="skin"
         )
 
+        if ml_result.get("melanoma_alert") is True:
+            scan_status = 2
+        else:
+            scan_status = ScanPersistenceService.derive_scan_status(
+                confidence, ai_diagnosis=ai_diagnosis, modality="skin"
+            )
+            
         # Step 4: Persist to scan_results
         try:
             await ScanPersistenceService.insert_scan_result(
