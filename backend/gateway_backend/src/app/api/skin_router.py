@@ -216,9 +216,6 @@ async def skin_predict(
         top_findings = ml_result.get("top_findings", [])
         confidence: float = float(top_findings[0].get("confidence", 0.0)) if top_findings else 0.0
         ai_diagnosis: str = str(ml_result.get("predicted_class", ""))
-        scan_status: int = ScanPersistenceService.derive_scan_status(
-            confidence, ai_diagnosis=ai_diagnosis, modality="skin"
-        )
 
         if ml_result.get("melanoma_alert") is True:
             scan_status = 2
