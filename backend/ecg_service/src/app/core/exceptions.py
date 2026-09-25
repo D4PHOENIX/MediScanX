@@ -77,9 +77,10 @@ class SignalProcessingError(ECGBaseException):
             message (str): Human-readable error description.
             context (Optional[Dict[str, Any]]): Additional debugging context.
         """
+        http_422 = getattr(status, "HTTP_422_UNPROCESSABLE_CONTENT", status.HTTP_422_UNPROCESSABLE_ENTITY)
         super().__init__(
             message=message,
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=http_422,
             context=context,
         )
 
