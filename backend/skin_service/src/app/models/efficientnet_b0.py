@@ -74,7 +74,11 @@ class EfficientNetB0Classifier(nn.Module):
                 clean_key = "backbone." + clean_key
             cleaned[clean_key] = v
 
-        model.load_state_dict(cleaned, strict=False)
+        missing, unexpected = model.load_state_dict(cleaned, strict=False)
+        if missing or unexpected:
+            raise RuntimeError(
+                f"Incompatible EfficientNet-B0 checkpoint: missing={missing}, unexpected={unexpected}"
+            )
         model.eval()
         model.to(cfg.device)
         return model

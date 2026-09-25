@@ -32,6 +32,7 @@ on:
             - main
         paths:
             - "backend/skin_service/**"
+            - ".github/workflows/skin-service.yml"
 
 # Cancel any superseded run for the same PR branch immediately.
 concurrency:
@@ -177,4 +178,4 @@ jobs:
                   docker run --rm \
                     -e SKIN_WEIGHTS_PATH=/dev/null/mock_weights.pth \
                     ${{ env.IMAGE_NAME }}:pr-${{ github.event.pull_request.number }} \
-                    python -c "import sys, io, contextlib; sys.path.insert(0, '/app/src'); from app.core.config import Settings, SkinInferenceConfig; from app.core.exceptions import ExceptionRegistry; captured = io.StringIO(); ctx = contextlib.redirect_stdout(captured); ctx.__enter__(); cfg = Settings(); inf_cfg = SkinInferenceConfig(); ctx.__exit__(None, None, None); assert captured.getvalue() == '', f'__post_init__ still calls print(): {captured.getvalue()!r}'; assert cfg.num_classes == 7, f'Wrong num_classes: {cfg.num_classes}'; assert cfg.image_size == 224; print('Import OK — Settings, ExceptionRegistry load cleanly.'); print(f'num_classes={cfg.num_classes}  image_size={cfg.image_size}'); print('No print() calls detected in __post_init__ (Bug #2 regression check passed.')"
+                    python -c "import sys, io, contextlib; sys.path.insert(0, '/app/src'); from app.core.config import Settings, SkinInferenceConfig; from app.core.exceptions import ExceptionRegistry; captured = io.StringIO(); ctx = contextlib.redirect_stdout(captured); ctx.__enter__(); cfg = Settings(); inf_cfg = SkinInferenceConfig(); ctx.__exit__(None, None, None); assert captured.getvalue() == '', f'__post_init__ still calls print(): {captured.getvalue()!r}'; assert cfg.num_classes == 8, f'Wrong num_classes: {cfg.num_classes}'; assert cfg.image_size == 224; print('Import OK — Settings, ExceptionRegistry load cleanly.'); print(f'num_classes={cfg.num_classes}  image_size={cfg.image_size}'); print('No print() calls detected in __post_init__ (Bug #2 regression check passed.')"
