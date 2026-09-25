@@ -39,7 +39,7 @@ CONTRACT_SEQ_LEN: int = 250        # = SAMPLE_RATE_HZ * WINDOW_DURATION_S
 CONTRACT_LEADS: int = 12
 CONTRACT_CLASSES: int = 5
 CONTRACT_LABELS: list = ["NORM", "MI", "STTC", "CD", "HYP"]
-CONTRACT_THRESHOLDS: list = [0.49, 0.38, 0.47, 0.49, 0.46]
+CONTRACT_THRESHOLDS: list = [0.51, 0.43, 0.49, 0.52, 0.50]
 
 
 # ---------------------------------------------------------------------------
