@@ -27,3 +27,10 @@ async def test_configuration_loading() -> None:
     assert cfg.std  == [0.229, 0.224, 0.225]
     # Verify input dimensions
     assert cfg.image_size == (224, 224)
+
+    # Verify Settings exposes runtime environment overrides
+    from app.core.config import Settings
+    settings = Settings()
+    assert settings.num_classes == 8
+    assert settings.melanoma_triage_threshold == 0.20
+    assert settings.enable_otsu_roi is True

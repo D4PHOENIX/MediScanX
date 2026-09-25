@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     device: str = "cpu"
     num_classes: int = 8
     image_size: int = 224
+    melanoma_triage_threshold: float = 0.20
+    enable_otsu_roi: bool = True
 
     class Config:
         """Pydantic model configuration.

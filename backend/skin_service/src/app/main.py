@@ -64,6 +64,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             device=torch.device(getattr(config_settings, "device", "cpu")),
             image_size=(getattr(config_settings, "image_size", 224), getattr(config_settings, "image_size", 224)),
             num_classes=getattr(config_settings, "num_classes", 8),
+            melanoma_triage_threshold=getattr(config_settings, "melanoma_triage_threshold", 0.20),
+            enable_otsu_roi=getattr(config_settings, "enable_otsu_roi", True),
         )
         # Construct the engine with the domain configuration dataclass, which
         # will be forwarded to the internal SkinDiagnosticEngine.
