@@ -256,8 +256,8 @@ async def test_skin_no_overlays(auth_headers) -> None:
     mock_response = MagicMock(spec=Response)
     mock_response.status_code = 200
     mock_response.json.return_value = {
-        "predicted_class": "Normal",
-        "top_findings": [{"label": "Normal", "confidence": 0.99, "class_idx": 0}],
+        "predicted_class": "Normal skin",
+        "top_findings": [{"label": "Normal skin", "confidence": 0.99, "class_idx": 0}],
     }
     mock_client.post.return_value = mock_response
     app.state.http_client = mock_client
@@ -540,3 +540,92 @@ async def test_skin_raw_upload_failure_cleanup_raises_still_returns_503(auth_hea
         assert response.status_code == 503
         mock_delete.assert_awaited_once()
         mock_insert.assert_not_awaited()
+
+@pytest.mark.asyncio
+async def test_skin_melanoma_alert_true_escalates_to_2(auth_headers) -> None:
+    from unittest.mock import patch
+    
+    mock_client = AsyncMock()
+    mock_response = MagicMock(spec=Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "predicted_class": "Melanocytic nevi",
+        "melanoma_alert": True,
+        "top_findings": [{"label": "Melanocytic nevi", "confidence": 0.10}]
+    }
+    mock_client.post.return_value = mock_response
+    app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
+    
+    with patch("app.api.skin_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.skin_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage:
+        
+        mock_storage.return_value = ("url_main", "user123/scan456.png")
+        
+        response = client.post("/api/v1/skin/predict", headers=auth_headers,
+            files={"file": ("skin.jpg", b"data", "image/jpeg")},
+        )
+        
+        assert response.status_code == 200
+        kwargs = mock_insert.call_args[1]
+        assert kwargs["scan_status"] == 2
+
+@pytest.mark.asyncio
+async def test_skin_melanoma_alert_false_uses_label_status(auth_headers) -> None:
+    from unittest.mock import patch
+    
+    mock_client = AsyncMock()
+    mock_response = MagicMock(spec=Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "predicted_class": "Melanocytic nevi",
+        "melanoma_alert": False,
+        "top_findings": [{"label": "Melanocytic nevi", "confidence": 0.10}]
+    }
+    mock_client.post.return_value = mock_response
+    app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
+    
+    with patch("app.api.skin_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.skin_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage:
+        
+        mock_storage.return_value = ("url_main", "user123/scan456.png")
+        
+        response = client.post("/api/v1/skin/predict", headers=auth_headers,
+            files={"file": ("skin.jpg", b"data", "image/jpeg")},
+        )
+        
+        assert response.status_code == 200
+        kwargs = mock_insert.call_args[1]
+        assert kwargs["scan_status"] == 1
+
+@pytest.mark.asyncio
+async def test_skin_melanoma_alert_absent_uses_label_status(auth_headers) -> None:
+    from unittest.mock import patch
+    
+    mock_client = AsyncMock()
+    mock_response = MagicMock(spec=Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "predicted_class": "Melanocytic nevi",
+        "top_findings": [{"label": "Melanocytic nevi", "confidence": 0.10}]
+    }
+    mock_client.post.return_value = mock_response
+    app.state.http_client = mock_client
+    app.state.db_pool = MagicMock()
+    app.state.supabase_client = MagicMock()
+    
+    with patch("app.api.skin_router.ScanPersistenceService.insert_scan_result", new_callable=AsyncMock) as mock_insert, \
+         patch("app.api.skin_router.StorageService.upload_scan_image", new_callable=AsyncMock) as mock_storage:
+        
+        mock_storage.return_value = ("url_main", "user123/scan456.png")
+        
+        response = client.post("/api/v1/skin/predict", headers=auth_headers,
+            files={"file": ("skin.jpg", b"data", "image/jpeg")},
+        )
+        
+        assert response.status_code == 200
+        kwargs = mock_insert.call_args[1]
+        assert kwargs["scan_status"] == 1

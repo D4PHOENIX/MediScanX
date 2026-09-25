@@ -211,9 +211,10 @@ def test_trends_unrecognised_label(auth_headers, app_state_override):
     run_trends_transition_test(auth_headers, "Unknown Disease", "No Finding", "indeterminate")
 
 def test_trends_normal_to_different_normal_returns_unchanged(auth_headers, app_state_override):
-    # normal → different normal produces unchanged, not changed
+    # Dermatofibroma and Vascular lesions are both abnormal (findings) after the label fix.
+    # Two different abnormal skin labels → "changed" (not "unchanged").
     run_trends_transition_test(
-        auth_headers, "Dermatofibroma", "Vascular lesions", "unchanged", modality="skin"
+        auth_headers, "Dermatofibroma", "Vascular lesions", "changed", modality="skin"
     )
 
 def test_trends_large_conf_delta_does_not_alter_direction(auth_headers, app_state_override):

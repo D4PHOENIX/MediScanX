@@ -29,7 +29,7 @@ async def test_cxr_persisted_metadata_absent_xai_key(auth_headers) -> None:
         "predicted_diagnoses": ["Pneumonia"],
         "original_img": fake_b64,
         "top_findings": [
-            {"label": "Infiltrate", "confidence": 0.90, "class_idx": 4, "abbreviation": "INF", "overlay_img": fake_b64}
+            {"label": "Lung Opacity", "confidence": 0.90, "class_idx": 4, "abbreviation": "LO", "overlay_img": fake_b64}
         ],
     }
 
@@ -67,7 +67,7 @@ async def test_cxr_response_includes_explainability_generated(auth_headers) -> N
     fake_ml = {
         "predicted_diagnoses": ["Pneumonia"],
         "top_findings": [
-            {"label": "Infiltrate", "confidence": 0.90, "class_idx": 4, "abbreviation": "INF", "overlay_img": fake_b64}
+            {"label": "Lung Opacity", "confidence": 0.90, "class_idx": 4, "abbreviation": "LO", "overlay_img": fake_b64}
         ],
     }
 
@@ -109,8 +109,8 @@ async def test_cxr_response_includes_explainability_generated(auth_headers) -> N
 async def test_cxr_response_explainability_none_when_no_overlays(auth_headers) -> None:
     """CXR router returns status='none' and url=null when no overlays exist."""
     fake_ml = {
-        "predicted_diagnoses": ["Normal"],
-        "top_findings": [{"label": "Normal", "confidence": 0.99, "class_idx": 0}],
+        "predicted_diagnoses": ["No Finding"],
+        "top_findings": [{"label": "No Finding", "confidence": 0.99, "class_idx": 0}],
     }
 
     mock_client = AsyncMock()
@@ -146,7 +146,7 @@ async def test_cxr_response_explainability_none_when_no_overlays(auth_headers) -
 @pytest.mark.asyncio
 async def test_ecg_response_includes_explainability(auth_headers) -> None:
     """ECG router returns explainability with status='none' and url=null."""
-    fake_ml = {"predicted_class": "Normal Sinus Rhythm", "confidence": 0.95}
+    fake_ml = {"predicted_class": "NORM", "confidence": 0.95}
 
     mock_client = AsyncMock()
     mock_response = MagicMock(spec=Response)
