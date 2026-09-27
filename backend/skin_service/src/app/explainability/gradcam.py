@@ -242,7 +242,8 @@ class SkinGradCAM:
         # CXR-style clinical spatial mask: non-lesion skin has 0 alpha (100% natural and clear)
         mask: np.ndarray = heatmap_blurred[..., np.newaxis]
         effective_alpha: np.ndarray = mask * self.cfg.heatmap_beta
+        base_weight: np.ndarray = 1.0 - (mask * (1.0 - self.cfg.heatmap_alpha))
 
-        overlay: np.ndarray = (base_f32 * (1.0 - effective_alpha)) + (heat_f32 * effective_alpha)
+        overlay: np.ndarray = (base_f32 * base_weight) + (heat_f32 * effective_alpha)
         overlay = np.clip(overlay, 0, 255).astype(np.uint8)
         return overlay

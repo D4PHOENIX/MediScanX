@@ -143,6 +143,9 @@ class SkinDiagnosticEngine:
             "top_findings": top_findings,
             "predicted_class": predicted_class,
             "patient_id": Path(image_path).name,
+            "triage_level": triage_level,
+            "melanoma_alert": melanoma_alert,
+            "clinical_note": clinical_note,
         }
 
     async def async_run_diagnostic(
