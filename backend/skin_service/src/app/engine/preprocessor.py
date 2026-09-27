@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 import torch
 import torchvision.transforms.functional as TF
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from app.core.config import SkinInferenceConfig
 from app.core.exceptions import UnreadableImageFormatError, InvalidImageDimensionError
@@ -79,6 +79,7 @@ class SkinPreprocessor:
         """Load, crop ROI, resize, normalise and return the batched tensor and visual base array."""
         try:
             img: Image.Image = Image.open(image_path).convert("RGB")
+            img = ImageOps.exif_transpose(img)
         except UnidentifiedImageError as e:
             raise UnreadableImageFormatError(path=image_path) from e
         except Exception as e:

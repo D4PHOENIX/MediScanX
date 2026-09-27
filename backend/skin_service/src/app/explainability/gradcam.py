@@ -230,17 +230,20 @@ class SkinGradCAM:
         heatmap_resized: np.ndarray = cv2.resize(
             heatmap, (target_w, target_h), interpolation=cv2.INTER_CUBIC
         )
+        heatmap_blurred: np.ndarray = cv2.GaussianBlur(heatmap_resized, (11, 11), 0)
 
-        heatmap_uint8: np.ndarray = np.uint8(255 * heatmap_resized)
+        heatmap_uint8: np.ndarray = np.uint8(255 * heatmap_blurred)
         heatmap_colored_bgr: np.ndarray = cv2.applyColorMap(heatmap_uint8, self.cfg.colormap)
         heatmap_colored_rgb: np.ndarray = cv2.cvtColor(heatmap_colored_bgr, cv2.COLOR_BGR2RGB)
 
         base_f32: np.ndarray = visual_base_rgb.astype(np.float32)
         heat_f32: np.ndarray = heatmap_colored_rgb.astype(np.float32)
 
-        overlay: np.ndarray = (
-            base_f32 * self.cfg.heatmap_alpha
-            + heat_f32 * self.cfg.heatmap_beta
-        )
+        # CXR-style clinical spatial mask: non-lesion skin has 0 alpha (100% natural and clear)
+        mask: np.ndarray = heatmap_blurred[..., np.newaxis]
+        effective_alpha: np.ndarray = mask * self.cfg.heatmap_beta
+        base_weight: np.ndarray = 1.0 - (mask * (1.0 - self.cfg.heatmap_alpha))
+
+        overlay: np.ndarray = (base_f32 * base_weight) + (heat_f32 * effective_alpha)
         overlay = np.clip(overlay, 0, 255).astype(np.uint8)
         return overlay
