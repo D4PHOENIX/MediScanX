@@ -62,9 +62,6 @@ The service exposes a multipart endpoint `/predict` for skin lesion analysis.
 | `top_findings[].overlay_img`  | `string`  | Base64-encoded PNG of the Grad-CAM heatmap overlaid on the original image.  |
 | `predicted_class`             | `string`  | The highest confidence clinical label prediction.                           |
 | `patient_id`                  | `string`  | Parsed from the incoming file name (for correlation).                       |
-| `triage_level`                | `string`  | Clinical triage level: `URGENT_REFERRAL`, `SPECIALIST_REVIEW`, `HEALTHY_SKIN`, `ROUTINE_MONITORING`. |
-| `melanoma_alert`              | `boolean` | Flag set to `true` whenever $P(\text{mel}) \ge 0.20$ safety threshold is triggered. |
-| `clinical_note`               | `string`  | Clinical recommendation rationale for the patient and healthcare provider. |
 
 ## Custom Error Mapping Framework
 
