@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:uuid/uuid.dart';
 import '../models/chat_models.dart';
 import '../../../core/database/database_manager.dart' hide ChatMessage;
 import '../services/chat_dao.dart';
@@ -10,160 +11,220 @@ import '../services/chat_service.dart';
 final chatServiceProvider = Provider<ChatService>((ref) => ChatService());
 
 final chatProvider = StateNotifierProvider<ChatNotifier, List<ChatMessage>>((ref) {
-  return ChatNotifier(ref.read(chatServiceProvider))..loadHistory();
+  return ChatNotifier(ref.read(chatServiceProvider));
 });
 
 class ChatNotifier extends StateNotifier<List<ChatMessage>> {
   final ChatService _chatService;
-  final ChatDao _chatDao = ChatDao(DatabaseManager.drift);
+  final ChatDao _chatDao = ChatDao();
   StreamSubscription<AgentEvent>? _agentSubscription;
-  String? _currentSessionId; // Tracks LangGraph session for multi-turn continuity
-  String? _currentScanId;    // UUID of the scan currently being discussed
+  StreamSubscription<List<ChatMessage>>? _dbSubscription;
+  Timer? _timeoutTimer;
+
+  String? _currentThreadId;
+  String? _currentScanId;
+
+  bool _isStreaming = false;
+  String _agentAction = "";
+
+  List<ChatMessage> _syncedMessages = [];
+  List<ChatMessage> _inMemoryBubbles = [];
+  int _targetSyncCount = -1;
 
   ChatNotifier(this._chatService) : super([]);
+
+  bool get isStreaming => _isStreaming;
+  String get agentAction => _agentAction;
+  String? get currentThreadId => _currentThreadId;
 
   String get _currentUserId =>
       Supabase.instance.client.auth.currentUser?.id ?? 'anonymous_patient';
 
-  /// Call this when opening the chat screen from a diagnostic result screen.
-  /// Sets the scan context so the agent knows which scan is being discussed.
   void setScanContext(String? scanId) {
     _currentScanId = scanId;
-    debugPrint('[Chat] 🪤 Scan context set: $_currentScanId');
   }
 
-  /// Loads previous chat history from local SQLite
-  Future<void> loadHistory() async {
-    final history = await _chatDao.getChatsForPatient(_currentUserId);
-    state = history;
+  void createNewSession() {
+    _currentThreadId = null; // Will generate UUID on first message
+    _dbSubscription?.cancel();
+    _syncedMessages = [];
+    _inMemoryBubbles = [];
+    _targetSyncCount = -1;
+    _isStreaming = false;
+    _agentAction = "";
+    _updateState();
   }
 
-  /// Appends and persists a user message
+  void loadSession(String threadId) {
+    _currentThreadId = threadId;
+    _syncedMessages = [];
+    _inMemoryBubbles = [];
+    _targetSyncCount = -1;
+    _isStreaming = false;
+    _agentAction = "";
+
+    _dbSubscription?.cancel();
+    _dbSubscription = _chatDao.watchChatsForSession(threadId).listen((msgs) {
+      _syncedMessages = msgs;
+      
+      // If we reached our target sync count, drop in-memory bubbles
+      if (_targetSyncCount != -1 && _syncedMessages.length >= _targetSyncCount) {
+        _inMemoryBubbles.clear();
+        _targetSyncCount = -1;
+        _timeoutTimer?.cancel();
+      }
+      
+      _updateState();
+    });
+  }
+
+  void _updateState() {
+    state = [..._syncedMessages, ..._inMemoryBubbles];
+  }
+
   void addUserMessage(String text) {
-    final message = ChatMessage(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      text: text,
-      isUser: true,
-      createdAt: DateTime.now(),
-    );
-    state = [...state, message];
-    _chatDao.insertChat(message, _currentUserId);
+    _startExchange(text);
   }
 
-  /// Appends and persists a final AI message (for non-streaming use)
-  void addAIMessage(String text) {
-    final message = ChatMessage(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      text: text,
-      isUser: false,
-      createdAt: DateTime.now(),
-    );
-    state = [...state, message];
-    _chatDao.insertChat(message, _currentUserId);
+  void retryMessage(String text) {
+    _startExchange(text);
   }
 
-  /// Starts a streaming agent response. Creates an empty AI bubble and fills it
-  /// token by token as the SSE stream delivers chunks.
-  void startAgentStream(String question) {
-    // Cancel any in-flight stream before starting a new one
+  void _startExchange(String text) {
+    if (_currentThreadId == null) {
+      _currentThreadId = const Uuid().v4();
+      loadSession(_currentThreadId!);
+    }
+
     _agentSubscription?.cancel();
+    _timeoutTimer?.cancel();
 
-    // Append an empty AI message placeholder that we'll fill incrementally
-    final streamingId = 'streaming_${DateTime.now().millisecondsSinceEpoch}';
-    final emptyAiMessage = ChatMessage(
-      id: streamingId,
-      text: '',
-      isUser: false,
-      createdAt: DateTime.now(),
-    );
-    state = [...state, emptyAiMessage];
+    _isStreaming = true;
+    _agentAction = "Connecting to AI...";
+
+    // Note the target sync count: current synced + user message (1) + AI reply (1)
+    _targetSyncCount = _syncedMessages.length + 2;
+
+    _inMemoryBubbles = [
+      ChatMessage(
+        id: const Uuid().v4(),
+        threadId: _currentThreadId,
+        text: text,
+        isUser: true,
+        createdAt: DateTime.now(),
+      ),
+      ChatMessage(
+        id: 'streaming_ai',
+        threadId: _currentThreadId,
+        text: '',
+        isUser: false,
+        createdAt: DateTime.now(),
+      ),
+    ];
+    _updateState();
 
     _agentSubscription = _chatService
         .streamAgentChat(
-          question,
+          text,
           _currentUserId,
-          sessionId: _currentSessionId,
-          currentScanId: _currentScanId, // Forward active scan UUID to agent
+          threadId: _currentThreadId!,
+          currentScanId: _currentScanId,
         )
         .listen(
       (event) {
         switch (event) {
-          case AgentTextEvent():
-            // Append token to the last message in state
-            final updated = List<ChatMessage>.from(state);
-            if (updated.isNotEmpty) {
-              final last = updated.last;
-              updated[updated.length - 1] = last.copyWith(text: last.text + event.token);
-              state = updated;
+          case AgentTextEvent e:
+            _agentAction = "";
+            if (_inMemoryBubbles.length == 2) {
+              final last = _inMemoryBubbles.last;
+              _inMemoryBubbles[1] = last.copyWith(text: last.text + e.token);
+              _updateState();
             }
 
-          case AgentDoneEvent():
-            // Store session ID for next turn
-            _currentSessionId = event.sessionId.isNotEmpty ? event.sessionId : _currentSessionId;
-            // Persist the final completed message to DB
-            if (state.isNotEmpty) {
-              final finalMsg = state.last.copyWith(
-                id: DateTime.now().millisecondsSinceEpoch.toString(),
-                citations: event.citations.isNotEmpty ? event.citations : null,
-              );
-              _chatDao.insertChat(finalMsg, _currentUserId);
-              // Update state with persisted ID
-              final updated = List<ChatMessage>.from(state);
-              updated[updated.length - 1] = finalMsg;
-              state = updated;
-            }
-            debugPrint('[Chat] ✅ Agent turn complete. Session: $_currentSessionId');
+          case AgentDoneEvent _:
+            _isStreaming = false;
+            _agentAction = "";
+            // Stream is done, but keep bubbles until DB syncs them (or timeout)
+            _startTimeoutTimer();
+            _updateState();
 
-          case AgentErrorEvent():
-            // Show error message in the bubble
-            if (state.isNotEmpty) {
-              final updated = List<ChatMessage>.from(state);
-              updated[updated.length - 1] = updated.last.copyWith(
-                text: '❌ ${event.message}',
-              );
-              state = updated;
-            }
-            debugPrint('[Chat] ❌ Agent error: ${event.message}');
+          case AgentErrorEvent e:
+            _markFailed('❌ ${e.message}');
 
-          case AgentToolCallEvent():
-            debugPrint('[Chat] 🔧 Tool call: ${event.toolName} with ${event.input}');
-
-          case AgentUiTriggerEvent():
-            debugPrint('[Chat] 🖼️ UI trigger: ${event.action} — ${event.payload}');
-
-          case AgentKeepAliveEvent():
+          case AgentToolCallEvent _:
             break; // No-op
+
+          case AgentUiTriggerEvent e:
+            _agentAction = e.action;
+            _updateState();
+
+          case AgentKeepAliveEvent _:
+            break;
         }
       },
       onError: (e) {
-        debugPrint('[Chat] Stream error: $e');
-        if (state.isNotEmpty) {
-          final updated = List<ChatMessage>.from(state);
-          updated[updated.length - 1] = updated.last.copyWith(text: '❌ Connection error.');
-          state = updated;
+        _markFailed('❌ Connection error.');
+      },
+      onDone: () {
+        if (_isStreaming) {
+           _isStreaming = false;
+           _agentAction = "";
+           _startTimeoutTimer();
+           _updateState();
         }
       },
-      onDone: () => debugPrint('[Chat] SSE stream closed.'),
     );
   }
 
-  /// Stops any active stream subscription
+  void _startTimeoutTimer() {
+    _timeoutTimer?.cancel();
+    _timeoutTimer = Timer(const Duration(seconds: 30), () {
+      if (_targetSyncCount != -1) {
+        _markFailed('❌ Not saved – Retry');
+      }
+    });
+  }
+
+  void _markFailed(String errorMsg) {
+    _isStreaming = false;
+    _agentAction = "";
+    _targetSyncCount = -1;
+    _timeoutTimer?.cancel();
+
+    if (_inMemoryBubbles.length == 2) {
+       final last = _inMemoryBubbles.last;
+       final currentText = last.text;
+       _inMemoryBubbles[1] = last.copyWith(
+         text: currentText.isEmpty ? errorMsg : '$currentText\n\n$errorMsg'
+       );
+       _updateState();
+    }
+  }
+
   void stopStream() {
     _agentSubscription?.cancel();
     _agentSubscription = null;
+    _isStreaming = false;
     _chatService.closeStream();
+    _timeoutTimer?.cancel();
   }
 
-  /// Clears the UI without deleting DB history
   void clearChat() {
     state = [];
-    _currentSessionId = null;
+    _currentThreadId = null;
     _currentScanId = null;
+    _isStreaming = false;
+    _syncedMessages = [];
+    _inMemoryBubbles = [];
+    _dbSubscription?.cancel();
+    _timeoutTimer?.cancel();
   }
 
   @override
   void dispose() {
     stopStream();
+    _dbSubscription?.cancel();
+    _timeoutTimer?.cancel();
     super.dispose();
   }
 }

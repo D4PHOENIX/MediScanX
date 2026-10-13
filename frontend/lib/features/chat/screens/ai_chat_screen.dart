@@ -5,10 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-// --- IMPORT YOUR CHAT STATE ENGINE, SERVICES, & MODELS ---
 import '../models/chat_models.dart';
 import '../providers/chat_provider.dart';
-import '../services/chat_service.dart';
 import 'package:mediscanx_mobile/features/diagnostic/models/diagnostic_result.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 
@@ -24,14 +22,13 @@ const Color aiBubbleBg = Colors.white;
 const Color userBubbleBg = Color(0xFF005C7A);
 
 class AIChatScreen extends ConsumerStatefulWidget {
-  // 🔴 1. Declare the preloaded result field
   final DiagnosticResult? preloadedResult;
   final String? scanContextId;
   final String? initialPrompt;
 
   const AIChatScreen({
     Key? key,
-    this.preloadedResult, // 🔴 2. Add it to the constructor
+    this.preloadedResult,
     this.scanContextId,
     this.initialPrompt,
   }) : super(key: key);
@@ -43,33 +40,25 @@ class AIChatScreen extends ConsumerStatefulWidget {
 class _AIChatScreenState extends ConsumerState<AIChatScreen> {
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
-  final ChatService _chatService = ChatService();
-
-  // SSE Streaming State
-  bool _isStreaming = false;
-  String _streamingText = "";
-  String _agentAction = "";
 
   @override
   void initState() {
     super.initState();
 
-    // 🔴 3. Automatically trigger the chat if data was handed off
     if (widget.scanContextId != null && widget.initialPrompt != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
+        ref.read(chatProvider.notifier).createNewSession();
         ref.read(chatProvider.notifier).setScanContext(widget.scanContextId!);
         _handleSubmitted(widget.initialPrompt!);
       });
     } else if (widget.preloadedResult != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
+        ref.read(chatProvider.notifier).createNewSession();
         final result = widget.preloadedResult!;
-
-        // Set the scan UUID context so the AI agent can reference this scan
         ref.read(chatProvider.notifier).setScanContext(result.id);
 
         final findingsStr = result.findings.map((f) => "${f.region} (${f.riskLevel} risk)").join(", ");
 
-        // Construct a highly detailed prompt for the AI Agent
         final autoPrompt = "I just completed a ${result.scanType} scan. "
             "The system detected the following: ${result.tags.join(', ')} with a confidence of ${(result.overallConfidence * 100).toStringAsFixed(1)}%. "
             "Specific findings include: $findingsStr. "
@@ -85,87 +74,9 @@ class _AIChatScreenState extends ConsumerState<AIChatScreen> {
     if (text.trim().isEmpty) return;
     _textController.clear();
 
-    final patientId = Supabase.instance.client.auth.currentUser?.id ?? "anonymous_patient";
-
-    // 1. Instantly save the user's message to Riverpod history
-    ref.read(chatProvider.notifier).addUserMessage(text);
-
-    // 2. Prepare the UI for the incoming stream
-    if (mounted) {
-      setState(() {
-        _isStreaming = true;
-        _streamingText = "";
-        _agentAction = "Connecting to AI...";
-      });
-    }
+    final notifier = ref.read(chatProvider.notifier);
+    notifier.addUserMessage(text);
     _scrollToBottom();
-
-    final scanContextId = ref.read(chatProvider.notifier).state.isEmpty 
-        ? ref.read(chatProvider).firstWhere((element) => false, orElse: () => ChatMessage(id: '', text: '', isUser: false, createdAt: DateTime.now())).id // Hack: we shouldn't read state directly. Better to get the current context id.
-        : null; // Actually, the provider has _currentScanId but it's private. Let's add a public getter.
-
-    // Let's just read it directly from widget if available, or provider if it's there.
-    // Wait, the provider doesn't expose it. Let's just get it from the widget!
-    final activeScanId = widget.scanContextId ?? widget.preloadedResult?.id;
-
-    // 3. Listen to the Live Agent Stream
-    _chatService.startAgentChatStream(text, patientId, activeScanId).listen(
-          (event) {
-        // Handle incoming text tokens
-        if (event.event == "text") {
-          final data = jsonDecode(event.data ?? "{}");
-          if (mounted) {
-            setState(() {
-              _streamingText += data['text'] ?? '';
-              _agentAction = ""; // Clear action text when actively talking
-            });
-          }
-          _scrollToBottom();
-        }
-        // Handle background agent tasks (e.g., "Fetching patient history...")
-        else if (event.event == "ui_trigger") {
-          if (mounted) {
-            setState(() {
-              _agentAction = event.data ?? "Processing...";
-            });
-          }
-          _scrollToBottom();
-        }
-        // Handle stream completion
-        else if (event.event == "done") {
-          // 4. Save the final generated message to Riverpod history
-          ref.read(chatProvider.notifier).addAIMessage(_streamingText);
-          if (mounted) {
-            setState(() {
-              _isStreaming = false;
-              _streamingText = "";
-              _agentAction = "";
-            });
-          }
-          _chatService.closeStream();
-        }
-      },
-      onError: (error) {
-        debugPrint("🔴 Chat Stream Error: $error");
-        if (mounted) {
-          setState(() {
-            _streamingText += "\n\n[Connection Error: The stream was interrupted.]";
-            _isStreaming = false;
-            _agentAction = "";
-          });
-        }
-        _chatService.closeStream();
-      },
-      onDone: () {
-        if (mounted && _isStreaming) {
-          setState(() {
-            _streamingText += "\n\n[Connection closed by server before completion.]";
-            _isStreaming = false;
-            _agentAction = "";
-          });
-        }
-      },
-    );
   }
 
   void _scrollToBottom() {
@@ -184,7 +95,6 @@ class _AIChatScreenState extends ConsumerState<AIChatScreen> {
   void dispose() {
     _textController.dispose();
     _scrollController.dispose();
-    _chatService.closeStream(); // Ensure SSE disconnects if user leaves screen
     super.dispose();
   }
 
@@ -196,10 +106,10 @@ class _AIChatScreenState extends ConsumerState<AIChatScreen> {
         .toLowerCase();
     final bool isDoctor = role == 'doctor';
 
-    // Watch the confirmed chat history from Riverpod
     final messages = ref.watch(chatProvider);
+    final isStreaming = ref.watch(chatProvider.notifier).isStreaming;
+    final agentAction = ref.watch(chatProvider.notifier).agentAction;
 
-    // Auto-scroll on new messages
     ref.listen<List<ChatMessage>>(chatProvider, (previous, next) {
       _scrollToBottom();
     });
@@ -208,7 +118,6 @@ class _AIChatScreenState extends ConsumerState<AIChatScreen> {
       backgroundColor: bgLight,
       body: Stack(
         children: [
-          // 1. STATIC WATERMARK BACKGROUND
           Positioned(
             top: 150,
             right: -80,
@@ -221,8 +130,6 @@ class _AIChatScreenState extends ConsumerState<AIChatScreen> {
               ),
             ),
           ),
-
-          // 2. FOREGROUND CONTENT
           SafeArea(
             child: Column(
               children: [
@@ -230,8 +137,6 @@ class _AIChatScreenState extends ConsumerState<AIChatScreen> {
                   padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
                   child: _buildHeader(),
                 ),
-
-                // Scrollable Chat Message Area
                 Expanded(
                   child: SingleChildScrollView(
                     controller: _scrollController,
@@ -240,28 +145,17 @@ class _AIChatScreenState extends ConsumerState<AIChatScreen> {
                       children: [
                         _buildPoweredByBanner(),
                         const SizedBox(height: 16),
-
-                        // Render confirmed messages
-                        ...messages.map(_buildMessageBubble).toList(),
-
-                        // Render the actively streaming message bubble
-                        if (_isStreaming && _streamingText.isNotEmpty)
-                          _buildStreamingBubble(),
-
-                        // Render the agent's internal thought process/loading state
-                        if (_isStreaming && _agentAction.isNotEmpty)
-                          _buildAgentActionIndicator(_agentAction),
-
+                        ...messages.asMap().entries.map((entry) => _buildMessageBubble(entry.value, entry.key, messages)).toList(),
+                        if (isStreaming && agentAction.isNotEmpty)
+                          _buildAgentActionIndicator(agentAction),
                         const SizedBox(height: 16),
-                        if (!_isStreaming) _buildSuggestionChips(),
+                        if (!isStreaming) _buildSuggestionChips(),
                         const SizedBox(height: 24),
                       ],
                     ),
                   ),
                 ),
-
-                // Fixed Input Area
-                _buildInputArea(),
+                _buildInputArea(isStreaming),
               ],
             ),
           ),
@@ -271,12 +165,7 @@ class _AIChatScreenState extends ConsumerState<AIChatScreen> {
     );
   }
 
-  // =========================================================================
-  // UI WIDGET COMPONENTS
-  // =========================================================================
-
   Widget _buildHeader() {
-    final canGoBack = context.canPop();
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -422,7 +311,10 @@ class _AIChatScreenState extends ConsumerState<AIChatScreen> {
     );
   }
 
-  Widget _buildMessageBubble(ChatMessage message) {
+  Widget _buildMessageBubble(ChatMessage message, int index, List<ChatMessage> allMessages) {
+    bool isStreamingBubble = message.id.startsWith('streaming_');
+    bool hasError = !message.isUser && message.text.contains('❌');
+    
     return Column(
       children: [
         Row(
@@ -438,7 +330,7 @@ class _AIChatScreenState extends ConsumerState<AIChatScreen> {
                   shape: BoxShape.circle,
                   boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2))],
                 ),
-                child: const Icon(Icons.psychology, color: accentCyan, size: 18),
+                child: Icon(hasError ? Icons.error_outline : (isStreamingBubble ? Icons.auto_awesome : Icons.psychology), color: hasError ? Colors.red : accentCyan, size: 18),
               ),
               const SizedBox(width: 12),
             ],
@@ -446,7 +338,7 @@ class _AIChatScreenState extends ConsumerState<AIChatScreen> {
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 decoration: BoxDecoration(
-                  color: message.isUser ? userBubbleBg : aiBubbleBg,
+                  color: message.isUser ? userBubbleBg : (hasError ? Colors.red.shade50 : aiBubbleBg),
                   borderRadius: BorderRadius.circular(20).copyWith(
                     bottomLeft: message.isUser ? const Radius.circular(20) : const Radius.circular(0),
                     bottomRight: message.isUser ? const Radius.circular(0) : const Radius.circular(20),
@@ -468,12 +360,34 @@ class _AIChatScreenState extends ConsumerState<AIChatScreen> {
                               listBullet: const TextStyle(color: textDark, fontSize: 14, height: 1.4),
                             ),
                           ),
-                    if (!message.isUser && message.citations != null && message.citations!.isNotEmpty) ...[
+                    if (hasError) ...[
+                      const SizedBox(height: 12),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: OutlinedButton.icon(
+                          onPressed: () {
+                             if (index > 0) {
+                               final prevMsg = allMessages[index - 1];
+                               if (prevMsg.isUser) {
+                                 ref.read(chatProvider.notifier).retryMessage(prevMsg.text);
+                               }
+                             }
+                          },
+                          icon: const Icon(Icons.refresh, size: 16, color: Colors.red),
+                          label: const Text('Retry', style: TextStyle(color: Colors.red)),
+                          style: OutlinedButton.styleFrom(
+                            side: const BorderSide(color: Colors.red),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                          ),
+                        ),
+                      )
+                    ],
+                    if (!message.isUser && message.citations != null && message.citations!.where((c) => c.sourceId != 'Unknown Source' && c.relevanceScore > 0).isNotEmpty) ...[
                       const Padding(
                         padding: EdgeInsets.symmetric(vertical: 8.0),
                         child: Divider(height: 1, thickness: 0.5, color: Color(0xFFECEFF1)),
                       ),
-                      ...message.citations!.map((citation) => Padding(
+                      ...message.citations!.where((c) => c.sourceId != 'Unknown Source' && c.relevanceScore > 0).map((citation) => Padding(
                         padding: const EdgeInsets.only(bottom: 6.0),
                         child: InkWell(
                           onTap: () {
@@ -503,51 +417,6 @@ class _AIChatScreenState extends ConsumerState<AIChatScreen> {
                       )).toList(),
                     ]
                   ],
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 16),
-      ],
-    );
-  }
-
-  Widget _buildStreamingBubble() {
-    return Column(
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.start,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              margin: const EdgeInsets.only(top: 8),
-              padding: const EdgeInsets.all(6),
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                shape: BoxShape.circle,
-                boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 2))],
-              ),
-              child: const Icon(Icons.auto_awesome, color: accentCyan, size: 18),
-            ),
-            const SizedBox(width: 12),
-            Flexible(
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                decoration: BoxDecoration(
-                  color: aiBubbleBg,
-                  borderRadius: BorderRadius.circular(20).copyWith(
-                    bottomLeft: const Radius.circular(0),
-                    bottomRight: const Radius.circular(20),
-                  ),
-                  boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 10, offset: const Offset(0, 5))],
-                ),
-                child: MarkdownBody(
-                  data: _streamingText,
-                  styleSheet: MarkdownStyleSheet(
-                    p: const TextStyle(color: textDark, fontSize: 14, height: 1.4),
-                    listBullet: const TextStyle(color: textDark, fontSize: 14, height: 1.4),
-                  ),
                 ),
               ),
             ),
@@ -628,7 +497,7 @@ class _AIChatScreenState extends ConsumerState<AIChatScreen> {
     );
   }
 
-  Widget _buildInputArea() {
+  Widget _buildInputArea(bool isStreaming) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
       decoration: BoxDecoration(
@@ -641,9 +510,9 @@ class _AIChatScreenState extends ConsumerState<AIChatScreen> {
             child: TextField(
               controller: _textController,
               onSubmitted: _handleSubmitted,
-              enabled: !_isStreaming,
+              enabled: !isStreaming,
               decoration: InputDecoration(
-                hintText: _isStreaming ? 'AI is thinking...' : 'Ask about symptoms, protocols...',
+                hintText: isStreaming ? 'AI is thinking...' : 'Ask about symptoms, protocols...',
                 hintStyle: const TextStyle(color: textLight, fontSize: 14),
                 border: InputBorder.none,
                 contentPadding: const EdgeInsets.symmetric(vertical: 12),
@@ -653,14 +522,10 @@ class _AIChatScreenState extends ConsumerState<AIChatScreen> {
           ),
           const SizedBox(width: 16),
           IconButton(
-            icon: Icon(_isStreaming ? Icons.stop_circle_outlined : Icons.send_rounded, color: _isStreaming ? Colors.red : accentCyan),
+            icon: Icon(isStreaming ? Icons.stop_circle_outlined : Icons.send_rounded, color: isStreaming ? Colors.red : accentCyan),
             onPressed: () {
-              if (_isStreaming) {
-                _chatService.closeStream();
-                setState(() {
-                  _isStreaming = false;
-                  _agentAction = "";
-                });
+              if (isStreaming) {
+                ref.read(chatProvider.notifier).stopStream();
               } else {
                 _handleSubmitted(_textController.text);
               }

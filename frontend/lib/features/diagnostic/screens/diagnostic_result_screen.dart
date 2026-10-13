@@ -45,15 +45,15 @@ final diagnosticResultProvider = Provider.family<DiagnosticResult, String>((ref,
       imagePath: '',
       scanType: 'Skin Lesion',
       aiModel: 'CNN Vision Model',
-      method: 'INT8 Quantized TFLite',
+      method: 'FP32 TFLite',
       overallConfidence: 0.92,
       isRedAlert: true,
       tags: ['Melanoma', 'Urgent'],
       recommendation: 'High risk of malignancy detected (Melanoma). Urgent dermatological biopsy recommended.',
       findings: [
         AIFinding(region: 'Melanoma', observation: 'Highest probability match', riskLevel: 'High', confidence: 0.92),
-        AIFinding(region: 'Melanocytic Nevi', observation: 'Secondary differential', riskLevel: 'Low', confidence: 0.05),
-        AIFinding(region: 'Benign Keratosis', observation: 'Low probability', riskLevel: 'Low', confidence: 0.02),
+        AIFinding(region: 'Melanocytic nevi', observation: 'Secondary differential', riskLevel: 'Low', confidence: 0.05),
+        AIFinding(region: 'Benign keratosis-like lesions', observation: 'Low probability', riskLevel: 'Low', confidence: 0.02),
       ],
     );
   }
@@ -424,12 +424,21 @@ class _DiagnosticResultScreenState extends ConsumerState<DiagnosticResultScreen>
     if (result.scanType.contains('Skin')) cardIcon = Icons.center_focus_weak_rounded;
 
     final xai = result.xai;
-    final bool hasGeneratedXai = xai?.status == 'generated' && xai?.url != null;
-    final bool isOverlay = xai?.kind == 'heatmap_overlay';
+    debugPrint('🔍 [DiagnosticResultScreen] scanId=${result.id}, scanType=${result.scanType}, xai status=${xai?.status}, kind=${xai?.kind}, url=${xai?.url}');
+
+    final bool hasGeneratedXai = xai?.url != null && xai!.url!.trim().isNotEmpty;
+    final bool isOverlay = xai?.kind == 'heatmap_overlay' ||
+                           xai?.kind == 'integrated_gradients' ||
+                           (hasGeneratedXai && xai?.kind != 'reconstructed_trace');
     final bool isTrace = xai?.kind == 'reconstructed_trace';
     
     // Check if we can show a heatmap toggle
     final bool canShowHeatmap = hasGeneratedXai || isTrace;
+
+    // FIX 3: Only show the primary (top) finding as the image overlay tag
+    final String? primaryTag = result.findings.isNotEmpty
+        ? result.findings.first.region
+        : (result.tags.isNotEmpty ? result.tags.first : null);
 
     return Column(
       children: [
@@ -458,12 +467,29 @@ class _DiagnosticResultScreenState extends ConsumerState<DiagnosticResultScreen>
                         fit: StackFit.expand,
                         children: [
                           // Base Layer
-                          if (isTrace)
-                            // If it's a trace, we DO NOT show original image. Just a dark background or the trace itself.
+                          if (xai?.status == 'skipped_edge')
+                            Center(
+                              child: Padding(
+                                padding: const EdgeInsets.all(24.0),
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(cardIcon, size: 64, color: Colors.white24),
+                                    const SizedBox(height: 16),
+                                    const Text(
+                                      'Heatmap not available for offline scans.',
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(color: Colors.white70, fontSize: 14),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            )
+                          else if (isTrace)
                             Center(child: Icon(cardIcon, size: 100, color: Colors.white10))
                           else if (result.imagePath.startsWith('http'))
                             AuthenticatedNetworkImage(imageUrl: result.imagePath, fit: BoxFit.contain)
-                          else if (result.imagePath.isNotEmpty && File(result.imagePath).existsSync())
+                          else if (result.imagePath.isNotEmpty && File(result.imagePath).existsSync() && !result.imagePath.endsWith('.csv'))
                             Image.file(File(result.imagePath), fit: BoxFit.contain)
                           else
                             Center(child: Icon(cardIcon, size: 100, color: Colors.white10)),
@@ -471,7 +497,7 @@ class _DiagnosticResultScreenState extends ConsumerState<DiagnosticResultScreen>
                           // Heatmap Layer (if toggled on)
                           if (_showHeatmap && hasGeneratedXai)
                             Opacity(
-                              opacity: isOverlay ? _heatmapOpacity : 1.0, // Trace is fully opaque
+                              opacity: isOverlay ? _heatmapOpacity : 1.0,
                               child: AuthenticatedNetworkImage(imageUrl: xai!.url!, fit: BoxFit.contain),
                             ),
                             
@@ -481,33 +507,18 @@ class _DiagnosticResultScreenState extends ConsumerState<DiagnosticResultScreen>
                       )
                     ),
                     
-                    if (result.isRedAlert)
+                    // FIX 2: Blue circle removed — it was an unintended decorative artefact
+                    
+                    // FIX 3: Show ONLY the primary finding tag (not all tags)
+                    if (primaryTag != null)
                       Positioned(
-                        top: 50, left: 60,
-                        child: Container(
-                          width: 60, height: 60,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: accentCyan.withOpacity(0.4),
-                            boxShadow: [BoxShadow(color: accentCyan.withOpacity(0.6), blurRadius: 25, spreadRadius: 10)],
-                          ),
+                        top: 16,
+                        left: 16,
+                        child: _buildOverlayTag(
+                          primaryTag,
+                          result.isRedAlert ? alertRed : accentCyan,
                         ),
                       ),
-                    
-                    // Tags
-                    Positioned(
-                      top: 16,
-                      left: 16,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: result.tags.asMap().entries.map((entry) {
-                          return Padding(
-                            padding: const EdgeInsets.only(bottom: 8.0),
-                            child: _buildOverlayTag(entry.value, entry.key % 2 == 0 ? accentCyan : alertRed),
-                          );
-                        }).toList(),
-                      ),
-                    ),
                     
                     // Scan Status Badge
                     Positioned(
@@ -564,21 +575,6 @@ class _DiagnosticResultScreenState extends ConsumerState<DiagnosticResultScreen>
                       'Reconstructed Lead I signal — not your original scan.',
                       style: TextStyle(color: Colors.white70, fontSize: 12, fontStyle: FontStyle.italic),
                       textAlign: TextAlign.center,
-                    ),
-                  ),
-
-                // Skipped Edge Banner
-                if (xai?.status == 'skipped_edge')
-                  Container(
-                    width: double.infinity,
-                    color: const Color(0xFFFFF4E5),
-                    padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
-                    child: Row(
-                      children: const [
-                        Icon(Icons.info_outline, color: alertOrange, size: 18),
-                        SizedBox(width: 8),
-                        Expanded(child: Text('Heatmaps are not available for on-device scans.', style: TextStyle(color: Color(0xFFB86C00), fontSize: 12))),
-                      ],
                     ),
                   ),
 
