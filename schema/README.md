@@ -14,7 +14,9 @@ It replaces the former `0001_baseline_schema.sql` (migrations through 0112) and 
 
 ## Applying it
 
-The script needs a **Supabase** project, because it depends on `auth.users`, `auth.uid()`, the `storage` schema and the `pg_cron` extension package. It is not a plain PostgreSQL script.
+The script needs a **Supabase** project, because it depends on `auth.users`, `auth.uid()`, the `storage` schema, the `anon` / `authenticated` / `service_role` roles and the `pg_cron` extension package. It is not a plain PostgreSQL script.
+
+If pg_cron is not available, the script stops at Section 1 with an error. A disposable test database that cannot install pg_cron (the agent's CI container, for example) can opt out explicitly with `SET mediscanx.allow_missing_pg_cron = 'on';` before applying. The schema then builds and `has_care_access()` still refuses expired relationships, but no expiry sweep is scheduled, and the script warns about this twice. Never set it on a real project.
 
 ```bash
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f schema/mediscanx_schema.sql
@@ -28,59 +30,59 @@ After applying, enable the PowerSync sync rules for the `powersync` publication 
 
 ## Sections
 
-| # | Section | Contents |
-|---|---|---|
-| 1 | Extensions | `uuid-ossp`, `pgcrypto`, `vector` (vector + halfvec), `pg_stat_statements` in `extensions`; `pg_cron` |
-| 2 | Identity | `patient_records`, `doctor_profiles`, both keyed on `auth.users(id)` |
-| 3 | Consent | `care_relationships`, the one-live-row partial unique index, the `expires_at` contract |
-| 4 | Diagnostic results | `scan_results` with modality / source / XAI CHECK constraints and indexes |
-| 5 | Reports | `reports` |
-| 6 | Agent | `chat_messages` and the four LangGraph `checkpoint*` tables |
-| 7 | Retrieval corpus | `rag_corpus` (halfvec(768), HNSW cosine index) |
-| 8 | Functions | consent check and RPCs, profile trigger function, RAG search, maintenance |
-| 9 | Triggers | `on_auth_user_created` on `auth.users`, `updated_at` on `scan_results` |
-| 10 | Row-level security | RLS on every table, 15 policies |
-| 11 | Storage | `scan-images` and `medical_reports` buckets (private, 25 MB), 4 object policies |
-| 12 | Publications | `powersync` (5 tables); `doctor_profiles` and `patient_records` added to `supabase_realtime` when it exists |
-| 13 | Scheduled jobs | `expire-care-relationships`, every 5 minutes |
+| #   | Section            | Contents                                                                                                    |
+| --- | ------------------ | ----------------------------------------------------------------------------------------------------------- |
+| 1   | Extensions         | `uuid-ossp`, `pgcrypto`, `vector` (vector + halfvec), `pg_stat_statements` in `extensions`; `pg_cron`       |
+| 2   | Identity           | `patient_records`, `doctor_profiles`, both keyed on `auth.users(id)`                                        |
+| 3   | Consent            | `care_relationships`, the one-live-row partial unique index, the `expires_at` contract                      |
+| 4   | Diagnostic results | `scan_results` with modality / source / XAI CHECK constraints and indexes                                   |
+| 5   | Reports            | `reports`                                                                                                   |
+| 6   | Agent              | `chat_messages` and the four LangGraph `checkpoint*` tables                                                 |
+| 7   | Retrieval corpus   | `rag_corpus` (halfvec(768), HNSW cosine index)                                                              |
+| 8   | Functions          | consent check and RPCs, profile trigger function, RAG search, maintenance                                   |
+| 9   | Triggers           | `on_auth_user_created` on `auth.users`, `updated_at` on `scan_results`                                      |
+| 10  | Row-level security | RLS on every table, 15 policies                                                                             |
+| 11  | Storage            | `scan-images` and `medical_reports` buckets (private, 25 MB), 4 object policies                             |
+| 12  | Publications       | `powersync` (5 tables); `doctor_profiles` and `patient_records` added to `supabase_realtime` when it exists |
+| 13  | Scheduled jobs     | `expire-care-relationships`, every 5 minutes                                                                |
 
 ## What it contains
 
-| | |
-|---|---|
-| Tables | 11, all with RLS enabled |
-| Policies | 15 on `public` tables + 4 on `storage.objects` |
-| Indexes | 30 |
-| Functions | 10 |
-| Triggers | 2 |
-| Buckets | 2, both private |
-| Cron jobs | 1 |
+|           |                                                |
+| --------- | ---------------------------------------------- |
+| Tables    | 11, all with RLS enabled                       |
+| Policies  | 15 on `public` tables + 4 on `storage.objects` |
+| Indexes   | 30                                             |
+| Functions | 10                                             |
+| Triggers  | 2                                              |
+| Buckets   | 2, both private                                |
+| Cron jobs | 1                                              |
 
 ### Tables
 
-| Table | Purpose |
-|---|---|
-| `patient_records` | Patient profile, keyed on `auth.users(id)` |
-| `doctor_profiles` | Doctor profile. **A row here is what makes a user a doctor** |
-| `care_relationships` | Consent: a doctor's access to one patient (`pending` · `active` · `declined` · `revoked`) |
-| `scan_results` | One row per scan across all three modalities, cloud or edge |
-| `reports` | One row per generated PDF referral report |
-| `chat_messages` | Assistant conversation history shown in the app (replicated by PowerSync) |
-| `rag_corpus` | 768-dim MedCPT embeddings of the retrieval corpus |
-| `checkpoints`, `checkpoint_blobs`, `checkpoint_writes`, `checkpoint_migrations` | LangGraph agent state; structure owned by the library. Don't alter it |
+| Table                                                                           | Purpose                                                                                   |
+| ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `patient_records`                                                               | Patient profile, keyed on `auth.users(id)`                                                |
+| `doctor_profiles`                                                               | Doctor profile. **A row here is what makes a user a doctor**                              |
+| `care_relationships`                                                            | Consent: a doctor's access to one patient (`pending` · `active` · `declined` · `revoked`) |
+| `scan_results`                                                                  | One row per scan across all three modalities, cloud or edge                               |
+| `reports`                                                                       | One row per generated PDF referral report                                                 |
+| `chat_messages`                                                                 | Assistant conversation history shown in the app (replicated by PowerSync)                 |
+| `rag_corpus`                                                                    | 768-dim MedCPT embeddings of the retrieval corpus                                         |
+| `checkpoints`, `checkpoint_blobs`, `checkpoint_writes`, `checkpoint_migrations` | LangGraph agent state; structure owned by the library. Don't alter it                     |
 
 ### Functions
 
-| Function | Role |
-|---|---|
-| `has_care_access(p_patient)` | The single consent check behind every doctor-facing policy. Resolves the doctor from `auth.uid()` and requires an `active`, unexpired relationship |
-| `request_care`, `respond_to_care`, `revoke_care` | Consent RPCs. A doctor requests, the patient accepts or declines, either side revokes |
-| `list_care_relationships()` | The calling patient's pending and active relationships, with the doctor's name, specialty and hospital, for the app's consent screen |
-| `expire_care_relationships()` | Marks relationships past `expires_at` as revoked. Executable only by `service_role`; run by cron |
-| `handle_new_user_profile()` | Creates the patient or doctor profile from sign-up metadata (trigger on `auth.users`) |
-| `update_updated_at_column()` | `updated_at` trigger function |
-| `match_rag_corpus(...)` | Cosine similarity search over `rag_corpus`, filterable by source and specialty |
-| `find_orphaned_scan_objects(p_min_age)` | Storage objects in `scan-images` with no matching scan row, for clean-up |
+| Function                                         | Role                                                                                                                                               |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `has_care_access(p_patient)`                     | The single consent check behind every doctor-facing policy. Resolves the doctor from `auth.uid()` and requires an `active`, unexpired relationship |
+| `request_care`, `respond_to_care`, `revoke_care` | Consent RPCs. A doctor requests, the patient accepts or declines, either side revokes                                                              |
+| `list_care_relationships()`                      | The calling patient's pending and active relationships, with the doctor's name, specialty and hospital, for the app's consent screen               |
+| `expire_care_relationships()`                    | Marks relationships past `expires_at` as revoked. Executable only by `service_role`; run by cron                                                   |
+| `handle_new_user_profile()`                      | Creates the patient or doctor profile from sign-up metadata (trigger on `auth.users`)                                                              |
+| `update_updated_at_column()`                     | `updated_at` trigger function                                                                                                                      |
+| `match_rag_corpus(...)`                          | Cosine similarity search over `rag_corpus`, filterable by source and specialty                                                                     |
+| `find_orphaned_scan_objects(p_min_age)`          | Storage objects in `scan-images` with no matching scan row, for clean-up                                                                           |
 
 ## Design decisions
 
@@ -94,12 +96,12 @@ After applying, enable the PowerSync sync rules for the `powersync` publication 
 
 **Enumerations are CHECK constraints,** so the constraint is the full legal vocabulary:
 
-| Column | Values |
-|---|---|
-| `scan_results.modality` | `cxr` · `ecg` · `skin` |
-| `scan_results.inference_source` | `cloud` · `edge` |
-| `scan_results.xai_status` | `none` · `generated` · `skipped_edge` · `failed` |
-| `care_relationships.status` | `pending` · `active` · `declined` · `revoked` |
+| Column                          | Values                                           |
+| ------------------------------- | ------------------------------------------------ |
+| `scan_results.modality`         | `cxr` · `ecg` · `skin`                           |
+| `scan_results.inference_source` | `cloud` · `edge`                                 |
+| `scan_results.xai_status`       | `none` · `generated` · `skipped_edge` · `failed` |
+| `care_relationships.status`     | `pending` · `active` · `declined` · `revoked`    |
 
 **`scan_status` comes from the finding first.** `0` Normal, `1` Warning, `2` High Risk. A confidently normal result can never read as high risk, because the confidence threshold applies only to abnormal labels. The gateway derives it; see `backend/gateway_backend/README.md`.
 
@@ -140,4 +142,4 @@ The file was checked against the live project in October 2026. It was applied tw
 
 ## Changing the schema
 
-Edit `mediscanx_schema.sql` in place and keep it idempotent and in section order. Apply the same change to the live project in the same pull request, and say in the PR how you verified that the two still match. Anything that must always hold belongs in a CHECK constraint, a policy or a `SECURITY DEFINER` function rather than in application code. The five PowerSync tables are written by clients directly, so the backend is not the only way into that data.
+Edit `mediscanx_schema.sql` in place and keep it idempotent and in section order. CI applies the whole file to a fresh pgvector container in `backend/agent_service/tests/test_rag_integration.py`; the agent workflow runs on every change under `schema/`. Apply the same change to the live project in the same pull request, and say in the PR how you verified that the two still match. Anything that must always hold belongs in a CHECK constraint, a policy or a `SECURITY DEFINER` function rather than in application code. The five PowerSync tables are written by clients directly, so the backend is not the only way into that data.

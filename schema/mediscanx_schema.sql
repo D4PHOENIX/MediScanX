@@ -21,9 +21,10 @@
 -- DROP ... IF EXISTS / CREATE pair, or a guarded DO block, so re-running it on
 -- a populated database is safe.
 --
--- Requires a Supabase project: `auth.users`, `auth.uid()` and the `storage`
--- schema must already exist, as must the pg_cron extension package. This is
--- not a plain PostgreSQL script.
+-- Requires a Supabase project: `auth.users`, `auth.uid()`, the `storage`
+-- schema and the `anon`, `authenticated` and `service_role` roles must already
+-- exist, as must the pg_cron extension package (see Section 1 for the
+-- test-database opt-out). This is not a plain PostgreSQL script.
 -- =============================================================================
 
 
@@ -42,7 +43,24 @@ CREATE EXTENSION IF NOT EXISTS pg_stat_statements  WITH SCHEMA extensions;
 
 -- pg_cron schedules the consent-expiry sweep (Section 13). Supabase installs
 -- it into its own schema; no WITH SCHEMA clause is given.
-CREATE EXTENSION IF NOT EXISTS pg_cron;
+--
+-- It is required. A database without the pg_cron package fails here, unless
+-- the session explicitly opts out with
+--     SET mediscanx.allow_missing_pg_cron = 'on';
+-- which exists for disposable test databases (CI containers) only. With the
+-- opt-out the schema still builds, has_care_access() still refuses expired
+-- relationships at read time, but no sweep is scheduled, and a WARNING says so.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'pg_cron') THEN
+        CREATE EXTENSION IF NOT EXISTS pg_cron;
+    ELSIF current_setting('mediscanx.allow_missing_pg_cron', true) = 'on' THEN
+        RAISE WARNING 'pg_cron is not available: the expire-care-relationships job will NOT be scheduled (mediscanx.allow_missing_pg_cron = on). Test databases only.';
+    ELSE
+        RAISE EXCEPTION 'pg_cron is required by the MediScanX schema (consent-expiry sweep) but is not available on this server'
+            USING HINT = 'Enable pg_cron in Supabase (Database > Extensions). For a disposable test database only, SET mediscanx.allow_missing_pg_cron = ''on'' before applying.';
+    END IF;
+END $$;
 
 
 -- =============================================================================
@@ -933,12 +951,20 @@ END $$;
 -- Every five minutes, move active care relationships past expires_at to
 -- 'revoked' (see expire_care_relationships in Section 8). Re-scheduling under
 -- the same name replaces the existing job, so this block is safe to re-run.
+-- pg_cron is absent only when Section 1 was explicitly told to allow it.
 
-SELECT cron.schedule(
-    'expire-care-relationships',
-    '*/5 * * * *',
-    $$SELECT public.expire_care_relationships();$$
-);
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
+        PERFORM cron.schedule(
+            'expire-care-relationships',
+            '*/5 * * * *',
+            'SELECT public.expire_care_relationships();'
+        );
+    ELSE
+        RAISE WARNING 'Skipped scheduling expire-care-relationships: pg_cron is not installed.';
+    END IF;
+END $$;
 
 
 -- =============================================================================
