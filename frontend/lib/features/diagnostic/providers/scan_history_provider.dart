@@ -8,6 +8,8 @@ import 'package:mediscanx_mobile/core/database/database_manager.dart';
 import 'package:mediscanx_mobile/features/diagnostic/services/scan_dao.dart';
 import 'package:mediscanx_mobile/features/diagnostic/models/diagnostic_result.dart';
 import 'package:mediscanx_mobile/core/config/env_config.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:mediscanx_mobile/features/diagnostic/services/xai_cache_service.dart';
 
 /// Streams the user's scan history directly from the local SQLite database in real-time.
 final userScanHistoryProvider = StreamProvider.family<List<DiagnosticResult>, String>((ref, userId) {
@@ -19,7 +21,10 @@ final userScanHistoryProvider = StreamProvider.family<List<DiagnosticResult>, St
     'SELECT * FROM scan_results WHERE user_id = ? ORDER BY created_at DESC',
     variables: [Variable.withString(userId)],
     readsFrom: {dao.db.scanResults},
-  ).watch().map((rows) {
+  ).watch().asyncMap((rows) async {
+    // Load SharedPreferences once per stream tick to check for cached XAI URLs
+    // that survive PowerSync overwrites
+    final prefs = await SharedPreferences.getInstance();
 
     return rows.map((row) {
       final metadataString = row.read<String?>('metadata');
@@ -60,12 +65,19 @@ final userScanHistoryProvider = StreamProvider.family<List<DiagnosticResult>, St
           if (item['riskLevel'] == null && item['risk_level'] == null && item.containsKey('scan_status')) {
             final statusVal = item['scan_status'];
             int? intStatus;
-            if (statusVal is int) intStatus = statusVal;
-            else if (statusVal is String) intStatus = int.tryParse(statusVal);
+            if (statusVal is int) {
+              intStatus = statusVal;
+            } else if (statusVal is String) {
+              intStatus = int.tryParse(statusVal);
+            }
             
-            if (intStatus == 2) risk = 'High';
-            else if (intStatus == 1) risk = 'Moderate';
-            else if (intStatus == 0) risk = 'Normal';
+            if (intStatus == 2) {
+              risk = 'High';
+            } else if (intStatus == 1) {
+              risk = 'Moderate';
+            } else if (intStatus == 0) {
+              risk = 'Normal';
+            }
           }
           final conf = (item['confidence'] as num?)?.toDouble() ?? 0.0;
           
@@ -95,20 +107,31 @@ final userScanHistoryProvider = StreamProvider.family<List<DiagnosticResult>, St
               final prob = (value['probability'] as num?)?.toDouble() ?? 0.0;
               final statusVal = value['scan_status'];
               int? scanStatusInt;
-              if (statusVal is int) scanStatusInt = statusVal;
-              else if (statusVal is String) scanStatusInt = int.tryParse(statusVal);
+              if (statusVal is int) {
+                scanStatusInt = statusVal;
+              } else if (statusVal is String) {
+                scanStatusInt = int.tryParse(statusVal);
+              }
               
               String risk = 'Moderate';
               if (scanStatusInt != null) {
-                if (scanStatusInt == 2) risk = 'High';
-                else if (scanStatusInt == 1) risk = 'Moderate';
-                else if (scanStatusInt == 0) risk = 'Normal';
+                if (scanStatusInt == 2) {
+                  risk = 'High';
+                } else if (scanStatusInt == 1) {
+                  risk = 'Moderate';
+                } else if (scanStatusInt == 0) {
+                  risk = 'Normal';
+                }
               } else {
                 final rawRisk = value['risk_level']?.toString().toUpperCase() ?? value['confidence']?.toString().toUpperCase();
                 if (rawRisk != null) {
-                  if (rawRisk == 'HIGH' || rawRisk == 'CRITICAL') risk = 'High';
-                  else if (rawRisk == 'MODERATE' || rawRisk == 'WARNING') risk = 'Moderate';
-                  else risk = 'Normal';
+                  if (rawRisk == 'HIGH' || rawRisk == 'CRITICAL') {
+                    risk = 'High';
+                  } else if (rawRisk == 'MODERATE' || rawRisk == 'WARNING') {
+                    risk = 'Moderate';
+                  } else {
+                    risk = 'Normal';
+                  }
                 }
               }
               parsedFindings.add(AIFinding(region: key.toString(), observation: 'Cloud API Analysis', riskLevel: risk, confidence: prob));
@@ -135,16 +158,51 @@ final userScanHistoryProvider = StreamProvider.family<List<DiagnosticResult>, St
         // Fallback to legacy scan_type mapping if modality is missing
         final scanTypeInt = row.read<int?>('scan_type') ?? 0;
         scanTypeStr = 'Chest X-Ray';
-        if (scanTypeInt == 1) scanTypeStr = 'ECG';
-        if (scanTypeInt == 2) scanTypeStr = 'Skin';
+        if (scanTypeInt == 1) {
+          scanTypeStr = 'ECG';
+        }
+        if (scanTypeInt == 2) {
+          scanTypeStr = 'Skin';
+        }
       }
 
-      final xaiStatus = row.read<String?>('xai_status') ?? meta['xai']?['status'] ?? 'not_requested';
-      final xaiPath = row.read<String?>('xai_path');
-      String? xaiUrl;
-      if (xaiPath != null) {
-        xaiUrl = '${EnvConfig.supabaseUrl}/storage/v1/object/authenticated/scan-images/$xaiPath';
+      // Retrieve XAI info from db columns or metadata
+      String? rawXai = row.read<String?>('xai_path');
+      if (rawXai == null || rawXai.trim().isEmpty) {
+        rawXai = meta['xai']?['url']?.toString() ??
+                 meta['explainability']?['url']?.toString() ??
+                 meta['xai_url']?.toString() ??
+                 meta['xai_path']?.toString();
       }
+
+      final scanId = row.read<String?>('scan_id') ?? row.read<String?>('id') ?? '';
+
+      // Fallback to local cache if Supabase overwrote the row with NULL
+      if (rawXai == null || rawXai.trim().isEmpty) {
+        rawXai = XAICacheService.getUrlSync(prefs, scanId);
+      }
+
+      String? xaiUrl;
+      if (rawXai != null && rawXai.trim().isNotEmpty) {
+        final trimmed = rawXai.trim();
+        if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+          xaiUrl = trimmed;
+        } else {
+          final cleanPath = trimmed.startsWith('scan-images/')
+              ? trimmed.substring('scan-images/'.length)
+              : trimmed;
+          xaiUrl = '${EnvConfig.supabaseUrl}/storage/v1/object/authenticated/scan-images/$cleanPath';
+        }
+      }
+
+      final xaiStatus = row.read<String?>('xai_status') ??
+          meta['xai']?['status']?.toString() ??
+          meta['explainability']?['status']?.toString() ??
+          (xaiUrl != null ? 'generated' : 'not_requested');
+
+      final xaiKind = meta['xai']?['kind']?.toString() ??
+          meta['explainability']?['kind']?.toString() ??
+          (scanTypeStr == 'ECG' ? 'integrated_gradients' : 'heatmap_overlay');
 
       // Retrieve scan status from db, fallback to meta, or derive from isRedAlert legacy logic
       int scanStatusInt = row.read<int?>('scan_status') ?? (meta['scan_status'] as int? ?? -1);
@@ -175,10 +233,31 @@ final userScanHistoryProvider = StreamProvider.family<List<DiagnosticResult>, St
       if (parsedFindings.isEmpty && aiDiagnosis != 'No recommendation' && aiDiagnosis != 'Unknown' && aiDiagnosis.isNotEmpty) {
         final conf = row.read<double?>('confidence') ?? -1.0;
         final actualConf = conf > 0 ? conf : 0.0;
+        
+        String calculatedRisk = 'Normal';
+        if (isRedAlert) {
+          calculatedRisk = 'High';
+        } else if (scanStatusInt == 1) {
+          calculatedRisk = 'Moderate';
+        } else if (scanStatusInt == 0) {
+          calculatedRisk = 'Normal';
+        } else {
+          String lowerDiag = aiDiagnosis.toLowerCase();
+          if (lowerDiag.contains('normal') || lowerDiag.contains('benign') || lowerDiag.contains('no finding')) {
+            calculatedRisk = 'Normal';
+          } else if (actualConf > 0.65) {
+            calculatedRisk = 'High';
+          } else if (actualConf > 0.35) {
+            calculatedRisk = 'Moderate';
+          } else {
+            calculatedRisk = 'Low';
+          }
+        }
+        
         parsedFindings.add(AIFinding(
           region: aiDiagnosis,
           observation: 'Primary diagnosis',
-          riskLevel: isRedAlert ? 'High' : (scanStatusInt == 1 ? 'Moderate' : (scanStatusInt == 0 ? 'Normal' : (actualConf >= 0.5 ? 'Moderate' : 'Normal'))),
+          riskLevel: calculatedRisk,
           confidence: actualConf,
         ));
       }
@@ -210,7 +289,7 @@ final userScanHistoryProvider = StreamProvider.family<List<DiagnosticResult>, St
         tags: tags.isEmpty ? ['Analyzed'] : tags,
         xai: XAIInfo(
           status: xaiStatus,
-          kind: xaiUrl != null ? 'heatmap_overlay' : null,
+          kind: xaiKind,
           url: xaiUrl,
         ),
         findings: parsedFindings,

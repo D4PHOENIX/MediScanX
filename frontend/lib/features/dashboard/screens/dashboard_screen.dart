@@ -687,6 +687,15 @@ class DashboardScreen extends ConsumerWidget {
           ListTile(leading: const Icon(Icons.badge_outlined, color: primaryBlue), title: const Text('Account Role', style: TextStyle(color: textLight, fontSize: 12)), subtitle: Text(role[0].toUpperCase() + role.substring(1), style: const TextStyle(color: textDark, fontWeight: FontWeight.w500, fontSize: 14))),
           const Divider(),
           ListTile(
+            leading: const Icon(Icons.history, color: primaryBlue),
+            title: const Text('Chat History', style: TextStyle(color: textDark, fontWeight: FontWeight.w600, fontSize: 14)),
+            subtitle: const Text('View past AI conversations', style: TextStyle(color: textLight, fontSize: 12)),
+            onTap: () {
+              Navigator.pop(context);
+              context.pushNamed('chat_history');
+            },
+          ),
+          ListTile(
             leading: const Icon(Icons.download_rounded, color: primaryBlue),
             title: const Text('Downloads', style: TextStyle(color: textDark, fontWeight: FontWeight.w600, fontSize: 14)),
             subtitle: const Text('View saved reports and QR codes', style: TextStyle(color: textLight, fontSize: 12)),
@@ -704,7 +713,7 @@ class DashboardScreen extends ConsumerWidget {
               context.goNamed('sync_debug');
             },
           ),
-          /*if (role.toLowerCase() != 'doctor')
+          if (role.toLowerCase() != 'doctor')
             ListTile(
               leading: const Icon(Icons.people_outline_rounded, color: primaryBlue),
               title: const Text('Manage Doctors', style: TextStyle(color: textDark, fontWeight: FontWeight.w600, fontSize: 14)),
@@ -713,7 +722,7 @@ class DashboardScreen extends ConsumerWidget {
                 Navigator.pop(context);
                 context.pushNamed('care_relationships');
               },
-            ),*/
+            ),
           const Spacer(),
           const Divider(),
           ListTile(

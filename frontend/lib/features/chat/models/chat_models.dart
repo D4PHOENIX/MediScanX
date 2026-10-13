@@ -2,6 +2,7 @@
 
 class ChatMessage {
   final String id;
+  final String? threadId;
   final String text;
   final bool isUser;
   final DateTime createdAt;
@@ -9,6 +10,7 @@ class ChatMessage {
 
   ChatMessage({
     required this.id,
+    this.threadId,
     required this.text,
     required this.isUser,
     required this.createdAt,
@@ -18,6 +20,7 @@ class ChatMessage {
   // Optional: A quick copyWith method in case you need to update a message later
   ChatMessage copyWith({
     String? id,
+    String? threadId,
     String? text,
     bool? isUser,
     DateTime? createdAt,
@@ -25,12 +28,27 @@ class ChatMessage {
   }) {
     return ChatMessage(
       id: id ?? this.id,
+      threadId: threadId ?? this.threadId,
       text: text ?? this.text,
       isUser: isUser ?? this.isUser,
       createdAt: createdAt ?? this.createdAt,
       citations: citations ?? this.citations,
     );
   }
+}
+
+class ChatSession {
+  final String id;
+  final String title;
+  final String lastMessagePreview;
+  final DateTime updatedAt;
+
+  ChatSession({
+    required this.id,
+    required this.title,
+    required this.lastMessagePreview,
+    required this.updatedAt,
+  });
 }
 
 class Citation {
@@ -82,11 +100,10 @@ class AgentUiTriggerEvent extends AgentEvent {
   const AgentUiTriggerEvent({required this.action, required this.payload});
 }
 
-/// The agent finished the turn. `sessionId` must be sent in the next request.
+/// The agent finished the turn.
 class AgentDoneEvent extends AgentEvent {
-  final String sessionId;
   final List<Citation> citations;
-  const AgentDoneEvent({required this.sessionId, required this.citations});
+  const AgentDoneEvent({required this.citations});
 }
 
 /// The server returned an error.

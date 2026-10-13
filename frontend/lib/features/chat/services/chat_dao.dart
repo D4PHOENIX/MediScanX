@@ -1,67 +1,149 @@
-// lib/features/chat/services/chat_dao.dart
 import 'dart:convert';
-import 'package:drift/drift.dart';
+import '../../../core/database/database_manager.dart';
 import '../models/chat_models.dart';
-import '../../../core/config/drift_database.dart' hide ChatMessage;
 
 class ChatDao {
-  final AppDatabase db;
-  ChatDao(this.db);
+  /// Fetch all chat sessions for a specific patient.
+  /// Uses a watch query so the UI updates as sync completes.
+  Stream<List<ChatSession>> watchChatSessionsForPatient(String patientId) {
+    final query = '''
+      SELECT m.thread_id,
+             MIN(m.created_at) AS started_at,
+             MAX(m.created_at) AS last_at,
+             (SELECT f.text FROM chat_messages f
+               WHERE f.thread_id = m.thread_id AND f.is_user = 1
+               ORDER BY f.created_at ASC LIMIT 1) AS title,
+             (SELECT a.text FROM chat_messages a
+               WHERE a.thread_id = m.thread_id AND a.is_user = 0
+               ORDER BY a.created_at DESC LIMIT 1) AS preview
+      FROM chat_messages m
+      WHERE m.patient_id = ?
+      GROUP BY m.thread_id
+      ORDER BY last_at DESC
+    ''';
 
-  /// Fetch all previous chats for a specific patient, ordered by time
-  Future<List<ChatMessage>> getChatsForPatient(String patientId) async {
-    final rows = await db.customSelect(
-      'SELECT * FROM langchain_chat_histories WHERE patient_id = ? ORDER BY created_at ASC',
-      variables: [Variable.withString(patientId)],
-    ).get();
-
-    return rows.map((row) {
-      // 1. Safely parse the citations JSON string back into a List<Citation>
-      List<Citation>? parsedCitations;
-      final citationsJson = row.read<String?>('citations');
-
-      if (citationsJson != null && citationsJson.isNotEmpty) {
-        try {
-          final List<dynamic> decoded = jsonDecode(citationsJson);
-          parsedCitations = decoded.map((c) => Citation.fromJson(c)).toList();
-        } catch (e) {
-          parsedCitations = [];
+    return DatabaseManager.powersync.watch(query, parameters: [patientId]).map((rows) {
+      return rows.map((row) {
+        final threadId = row['thread_id'] as String;
+        
+        String title = "New Conversation";
+        final rawTitle = row['title'];
+        if (rawTitle != null) {
+          title = _parseMessageText(rawTitle);
+          if (title.startsWith('I just completed a ')) {
+            final match = RegExp(r'I just completed a (.*?) scan').firstMatch(title);
+            if (match != null) {
+              title = "${match.group(1)} Analysis";
+            } else {
+              title = "Diagnostic Analysis";
+            }
+          } else if (title.startsWith('About my ')) {
+            final match = RegExp(r'About my (.*?):').firstMatch(title);
+            if (match != null) {
+              title = match.group(1) ?? "Scan Analysis";
+            } else {
+              title = "Scan Analysis";
+            }
+          } else {
+            title = title.replaceAll('\n', ' ').trim();
+            if (title.length > 40) title = '${title.substring(0, 40)}...';
+          }
         }
-      }
 
-      // 2. Map the SQLite row back to your Flutter model
-      return ChatMessage(
-        id: row.read<String>('id'),
-        text: row.read<String>('text'),
-        isUser: row.read<int>('is_user') == 1,
-        createdAt: DateTime.parse(row.read<String>('created_at')),
-        citations: parsedCitations,
-      );
-    }).toList();
+        String preview = "";
+        final rawPreview = row['preview'];
+        if (rawPreview != null) {
+          preview = _parseMessageText(rawPreview);
+          preview = preview.replaceAll('\n', ' ').trim();
+          if (preview.length > 50) preview = '${preview.substring(0, 50)}...';
+        }
+
+        final lastAtStr = row['last_at'] as String?;
+        final updatedAt = _parseTimestamp(lastAtStr);
+
+        return ChatSession(
+          id: threadId,
+          title: title,
+          lastMessagePreview: preview,
+          updatedAt: updatedAt,
+        );
+      }).toList();
+    });
   }
 
-  /// Save a new message locally (PowerSync automatically syncs this to Supabase)
-  Future<void> insertChat(ChatMessage message, String patientId) async {
-    // Convert citations list to a JSON string for SQLite storage
-    final citationsJson = message.citations != null
-        ? jsonEncode(message.citations!.map((c) => {
-      'source_id': c.sourceId,
-      'snippet': c.snippet,
-      'relevance_score': c.relevanceScore,
-    }).toList())
-        : null;
+  /// Fetch all previous chats for a specific thread, ordered by time
+  Stream<List<ChatMessage>> watchChatsForSession(String threadId) {
+    final query = 'SELECT * FROM chat_messages WHERE thread_id = ? ORDER BY created_at ASC';
+    
+    return DatabaseManager.powersync.watch(query, parameters: [threadId]).map((rows) {
+      return rows.map((row) {
+        // 1. Parse Citations
+        List<Citation>? parsedCitations;
+        final citationsRaw = row['citations'];
+        if (citationsRaw != null) {
+          if (citationsRaw is String) {
+            try {
+              final List<dynamic> decoded = jsonDecode(citationsRaw);
+              parsedCitations = decoded.map((c) => Citation.fromJson(c)).toList();
+            } catch (_) { parsedCitations = []; }
+          }
+        }
 
-    await db.customInsert(
-      'INSERT OR IGNORE INTO langchain_chat_histories (id, patient_id, text, is_user, created_at, citations) '
-          'VALUES (?, ?, ?, ?, ?, ?)',
-      variables: [
-        Variable.withString(message.id),
-        Variable.withString(patientId),
-        Variable.withString(message.text),
-        Variable.withInt(message.isUser ? 1 : 0),
-        Variable.withString(message.createdAt.toIso8601String()),
-        Variable<String>(citationsJson),
-      ],
-    );
+        // 2. Parse Text
+        final rawText = row['text'];
+        String parsedText = _parseMessageText(rawText);
+
+        // 3. Parse is_user
+        bool isUser = false;
+        if (row['is_user'] is int) {
+          isUser = row['is_user'] == 1;
+        }
+
+        // 4. Map to Model
+        return ChatMessage(
+          id: row['id']?.toString() ?? '',
+          threadId: threadId,
+          text: parsedText,
+          isUser: isUser,
+          createdAt: _parseTimestamp(row['created_at']?.toString()),
+          citations: parsedCitations,
+        );
+      }).toList();
+    });
+  }
+
+  /// Delete a chat, inside a write transaction
+  Future<void> deleteChat(String threadId) async {
+    await DatabaseManager.powersync.writeTransaction((tx) async {
+      await tx.execute('DELETE FROM chat_messages WHERE thread_id = ?', [threadId]);
+    });
+  }
+
+  DateTime _parseTimestamp(String? timestamp) {
+    if (timestamp == null || timestamp.isEmpty) return DateTime.now();
+    String clean = timestamp.trim();
+    if (!clean.endsWith('Z') && !clean.contains('+')) {
+      clean = clean.replaceAll(' ', 'T') + 'Z';
+    }
+    return DateTime.tryParse(clean)?.toLocal() ?? DateTime.now();
+  }
+
+  /// Helper to parse the message text which might be a LangGraph JSON array
+  String _parseMessageText(dynamic rawText) {
+    if (rawText == null) return '';
+    
+    if (rawText is String) {
+      if (rawText.trim().startsWith('[')) {
+        try {
+          final List<dynamic> parsed = jsonDecode(rawText);
+          return parsed.map((e) => e['text']?.toString() ?? '').join('');
+        } catch (e) {
+          return rawText;
+        }
+      }
+      return rawText;
+    }
+    
+    return rawText.toString();
   }
 }

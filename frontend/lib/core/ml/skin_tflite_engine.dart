@@ -10,53 +10,37 @@ class SkinTfliteEngine {
 
   Interpreter? _interpreter;
   final int inputSize = 224;
-  final int numClasses = 7; // Matching the length of the provided dictionary
+  final int numClasses = 8; // 8 classes for the fp32 model
 
   // Human-readable labels mapped from the Python dictionary
   // IMPORTANT: Ensure this order matches the exact index order the ML model outputs!
   final List<String> _labels = [
-    'Actinic Keratoses',    // 0: akiec
-    'Basal Cell Carcinoma', // 1: bcc
-    'Benign Keratosis',     // 2: bkl
-    'Dermatofibroma',       // 3: df
-    'Melanoma',             // 4: mel
-    'Melanocytic Nevi',     // 5: nv
-    'Vascular Lesions'      // 6: vasc
+    'Actinic keratoses',             // Index 0 (akiec)
+    'Basal cell carcinoma',          // Index 1 (bcc)
+    'Benign keratosis-like lesions', // Index 2 (bkl)
+    'Dermatofibroma',                // Index 3 (df)
+    'Melanoma',                      // Index 4 (mel)
+    'Normal skin',                   // Index 5 (normal) - NEW!
+    'Melanocytic nevi',              // Index 6 (nv) - SHIFTED
+    'Vascular lesions'               // Index 7 (vasc) - SHIFTED
   ];
 
   // Standard ImageNet normalization values
   final List<double> mean = [0.485, 0.456, 0.406];
   final List<double> std = [0.229, 0.224, 0.225];
 
-  // Quantization parameters
-  double _inputScale = 1.0;
-  int _inputZeroPoint = 0;
-  double _outputScale = 1.0;
-  int _outputZeroPoint = 0;
-
   // ==========================================
-  // 1. INITIALIZE THE INT8 SKIN MODEL
+  // 1. INITIALIZE THE FP32 SKIN MODEL
   // ==========================================
   Future<void> loadModel() async {
     try {
-      debugPrint('⏳ Loading INT8 Skin TFLite model...');
-      _interpreter = await Interpreter.fromAsset('assets/models/skin_model/skin_model.tflite');
+      debugPrint('⏳ Loading FP32 Skin TFLite model...');
+      _interpreter = await Interpreter.fromAsset('assets/models/skin_model/skin_multidomain_fp32.tflite');
       debugPrint('🟢 Skin Model loaded successfully!');
 
       if (_interpreter != null) {
         final inputTensor = _interpreter!.getInputTensor(0);
-        final outputTensor = _interpreter!.getOutputTensor(0);
-
         debugPrint('📐 Skin Input Shape: ${inputTensor.shape}');
-
-        // Auto-extract the quantization math from the TFLite file
-        final inputParams = inputTensor.params;
-        _inputScale = inputParams.scale == 0 ? 1.0 : inputParams.scale;
-        _inputZeroPoint = inputParams.zeroPoint;
-
-        final outputParams = outputTensor.params;
-        _outputScale = outputParams.scale == 0 ? 1.0 : outputParams.scale;
-        _outputZeroPoint = outputParams.zeroPoint;
       }
     } catch (e) {
       debugPrint('🔴 Failed to load Skin model: $e');
@@ -64,7 +48,7 @@ class SkinTfliteEngine {
   }
 
   // ==========================================
-  // 2. PREPROCESS, QUANTIZE & RUN INFERENCE
+  // 2. PREPROCESS & RUN INFERENCE
   // ==========================================
   /// Returns a Map of { "Disease Name": Probability Percentage }
   Future<Map<String, double>?> inferSkinImage(Uint8List imageBytes) async {
@@ -80,17 +64,17 @@ class SkinTfliteEngine {
       img.Image resizedImage = img.copyResize(originalImage, width: inputSize, height: inputSize);
 
       // ==========================================
-      // FIXED: Channels-Last INT8 Tensor: [1, 224, 224, 3]
+      // Channels-Last FP32 Tensor: [1, 224, 224, 3]
       // ==========================================
       var inputBuffer = List.generate(1, (batch) =>
           List.generate(inputSize, (y) =>
               List.generate(inputSize, (x) =>
-                  List.filled(3, 0) // The 3 color channels are now at the END
+                  List.filled(3, 0.0) // Float32
               )
           )
       );
 
-      // 3. Extract, Normalize, and Quantize Pixels
+      // 3. Extract and Normalize Pixels
       for (int y = 0; y < inputSize; y++) {
         for (int x = 0; x < inputSize; x++) {
           final pixel = resizedImage.getPixel(x, y);
@@ -105,28 +89,25 @@ class SkinTfliteEngine {
           double gNorm = (g - mean[1]) / std[1];
           double bNorm = (b - mean[2]) / std[2];
 
-          // Quantize to INT8: (value / scale) + zero_point, then clamp
-          // FIXED: The array access order is now [0][y][x][channel]
-          inputBuffer[0][y][x][0] = ((rNorm / _inputScale) + _inputZeroPoint).round().clamp(-128, 127);
-          inputBuffer[0][y][x][1] = ((gNorm / _inputScale) + _inputZeroPoint).round().clamp(-128, 127);
-          inputBuffer[0][y][x][2] = ((bNorm / _inputScale) + _inputZeroPoint).round().clamp(-128, 127);
+          // Assign directly to float buffer
+          inputBuffer[0][y][x][0] = rNorm;
+          inputBuffer[0][y][x][1] = gNorm;
+          inputBuffer[0][y][x][2] = bNorm;
         }
       }
 
-      // 4. Prepare INT8 output tensor for 7 classes
-      var outputBuffer = List.filled(1 * numClasses, 0).reshape([1, numClasses]);
+      // 4. Prepare FP32 output tensor for 8 classes
+      var outputBuffer = List.filled(1 * numClasses, 0.0).reshape([1, numClasses]);
 
       // 5. Run Inference
       _interpreter!.run(inputBuffer, outputBuffer);
 
-      // 6. De-Quantize the output and map to labels
+      // 6. Map to labels
       Map<String, double> mappedResults = {};
 
       for (int i = 0; i < numClasses; i++) {
-        int rawInt8Output = outputBuffer[0][i];
-
-        // De-quantize back to float probability
-        double floatProbability = (rawInt8Output - _outputZeroPoint) * _outputScale;
+        // Output is already a float probability (often from a softmax layer)
+        double floatProbability = outputBuffer[0][i];
 
         // Map to string label
         String diseaseName = i < _labels.length ? _labels[i] : 'Unknown Class $i';

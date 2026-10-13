@@ -12,6 +12,7 @@ import '../../../core/ml/skin_tflite_engine.dart';
 // --- MODELS & SERVICES ---
 import '../models/diagnostic_result.dart';
 import 'package:uuid/uuid.dart';
+import 'package:mediscanx_mobile/features/diagnostic/services/xai_cache_service.dart';
 // ==========================================
 // CHEST X-RAY CONSTANTS & PROVIDERS
 // ==========================================
@@ -32,6 +33,83 @@ final tfLiteEngineProvider = Provider<TFLiteEngine>((ref) {
 final cloudDiagnosticProvider = Provider<CloudDiagnosticService>((ref) {
   return CloudDiagnosticService();
 });
+
+/// Searches every known location in a cloud API response for an XAI/heatmap URL.
+/// Logs what it finds so we can identify the correct field name from device logs.
+XAIInfo _extractXai(Map<String, dynamic> cloudData, {required String defaultKind}) {
+  String? xaiUrl;
+  String? xaiStatus;
+  String? xaiKind;
+
+  // --- Dump top-level keys for debugging ---
+  debugPrint('🔍 [XAI] Top-level response keys: ${cloudData.keys.toList()}');
+  debugPrint('🔍 [XAI] explainability value: ${cloudData['explainability']}');
+  debugPrint('🔍 [XAI] xai value: ${cloudData['xai']}');
+  debugPrint('🔍 [XAI] heatmap_url: ${cloudData['heatmap_url']}');
+  debugPrint('🔍 [XAI] xai_url: ${cloudData['xai_url']}');
+  debugPrint('🔍 [XAI] grad_cam_url: ${cloudData['grad_cam_url']}');
+
+  // 1. Standard 'explainability' object
+  final explain = cloudData['explainability'];
+  if (explain is Map) {
+    xaiUrl    = explain['url']?.toString();
+    xaiStatus = explain['status']?.toString();
+    xaiKind   = explain['kind']?.toString();
+    debugPrint('🔍 [XAI] explainability.url=$xaiUrl, status=$xaiStatus, kind=$xaiKind');
+  }
+
+  // 2. 'xai' object (alternative wrapping)
+  if (xaiUrl == null || xaiUrl.isEmpty) {
+    final xaiObj = cloudData['xai'];
+    if (xaiObj is Map) {
+      xaiUrl    = xaiObj['url']?.toString();
+      xaiStatus ??= xaiObj['status']?.toString();
+      xaiKind   ??= xaiObj['kind']?.toString();
+    }
+  }
+
+  // 3. Direct top-level URL fields
+  xaiUrl ??= cloudData['heatmap_url']?.toString();
+  xaiUrl ??= cloudData['xai_url']?.toString();
+  xaiUrl ??= cloudData['grad_cam_url']?.toString();
+  xaiUrl ??= cloudData['cam_url']?.toString();
+  xaiUrl ??= cloudData['explainability_url']?.toString();
+  xaiUrl ??= cloudData['xai_image_url']?.toString();
+  xaiUrl ??= cloudData['visualization_url']?.toString();
+
+  // 4. Inside top_findings or predictions items
+  if (xaiUrl == null || xaiUrl.isEmpty) {
+    final rawFindings = cloudData['top_findings'] ?? cloudData['predictions'];
+    final List<dynamic> fList = rawFindings is List
+        ? rawFindings
+        : (rawFindings is Map ? rawFindings.values.toList() : []);
+    for (final f in fList) {
+      if (f is Map) {
+        final fromFinding =
+            f['heatmap_url']?.toString() ??
+            f['cam_url']?.toString() ??
+            f['xai_url']?.toString() ??
+            f['grad_cam_url']?.toString();
+        if (fromFinding != null && fromFinding.isNotEmpty) {
+          xaiUrl = fromFinding;
+          debugPrint('🔍 [XAI] Found URL inside finding: $xaiUrl');
+          break;
+        }
+      }
+    }
+  }
+
+  // Normalise empty string to null
+  if (xaiUrl?.isEmpty == true) xaiUrl = null;
+
+  debugPrint('🔍 [XAI] Final resolved → url=$xaiUrl, status=$xaiStatus, kind=${xaiKind ?? defaultKind}');
+
+  return XAIInfo(
+    status: xaiUrl != null ? (xaiStatus ?? 'generated') : (xaiStatus ?? 'none'),
+    kind:   xaiUrl != null ? (xaiKind ?? defaultKind) : null,
+    url:    xaiUrl,
+  );
+}
 
 // 🔴 THE FIX: Changed to a standard Provider that returns a Function
 final analyzeXRayProvider = Provider((ref) {
@@ -54,7 +132,6 @@ final analyzeXRayProvider = Provider((ref) {
           double highestConfidence = 0.0;
           bool isRedAlert = false;
           List<String> activeTags = [];
-          String? extractedHeatmap;
 
           final findingsList = cloudData['top_findings'] as List<dynamic>? ?? [];
 
@@ -66,23 +143,32 @@ final analyzeXRayProvider = Provider((ref) {
             
             final statusVal = finding['scan_status'];
             int? scanStatusInt;
-            if (statusVal is int) scanStatusInt = statusVal;
-            else if (statusVal is String) scanStatusInt = int.tryParse(statusVal);
+            if (statusVal is int) {
+              scanStatusInt = statusVal;
+            } else if (statusVal is String) scanStatusInt = int.tryParse(statusVal);
             
             String risk = 'Moderate'; // Default if unrecognized
             if (scanStatusInt != null) {
-              if (scanStatusInt == 2) risk = 'High';
-              else if (scanStatusInt == 1) risk = 'Moderate';
+              if (scanStatusInt == 2) {
+                risk = 'High';
+              } else if (scanStatusInt == 1) risk = 'Moderate';
               else if (scanStatusInt == 0) risk = 'Normal';
             } else {
               final rawRisk = finding['risk_level']?.toString().toUpperCase();
               if (rawRisk != null) {
-                if (rawRisk == 'HIGH' || rawRisk == 'CRITICAL') risk = 'High';
-                else if (rawRisk == 'MODERATE' || rawRisk == 'WARNING') risk = 'Moderate';
+                if (rawRisk == 'HIGH' || rawRisk == 'CRITICAL') {
+                  risk = 'High';
+                } else if (rawRisk == 'MODERATE' || rawRisk == 'WARNING') risk = 'Moderate';
                 else risk = 'Normal';
               } else {
-                if (label.toLowerCase().contains('no finding') || label.toLowerCase() == 'normal' || label.toLowerCase() == 'norm') {
+                if (label.toLowerCase().contains('no finding') || label.toLowerCase().contains('normal') || label.toLowerCase() == 'norm') {
                   risk = 'Normal';
+                } else if (conf > 0.65) {
+                  risk = 'High';
+                } else if (conf > 0.35) {
+                  risk = 'Moderate';
+                } else {
+                  risk = 'Low';
                 }
               }
             }
@@ -106,8 +192,9 @@ final analyzeXRayProvider = Provider((ref) {
           }
           if (cloudData.containsKey('scan_status') && cloudData['scan_status'] != null) {
             final statusRaw = cloudData['scan_status'];
-            if (statusRaw is int) overallScanStatus = statusRaw;
-            else if (statusRaw is String) overallScanStatus = int.tryParse(statusRaw) ?? -1;
+            if (statusRaw is int) {
+              overallScanStatus = statusRaw;
+            } else if (statusRaw is String) overallScanStatus = int.tryParse(statusRaw) ?? -1;
             isRedAlert = overallScanStatus == 2;
           }
           if (cloudData.containsKey('primary_diagnosis') && cloudData['primary_diagnosis'] != null) {
@@ -118,20 +205,20 @@ final analyzeXRayProvider = Provider((ref) {
             if (activeTags.isEmpty && topDiagnosis != null) activeTags.add(topDiagnosis.toString());
           }
 
-          final explain = cloudData['explainability'];
-          XAIInfo? xaiData;
-          if (explain is Map) {
-            xaiData = XAIInfo(
-              status: explain['status']?.toString() ?? 'none',
-              kind: 'heatmap_overlay',
-              url: explain['url']?.toString(),
-            );
-          } else {
-            xaiData = XAIInfo(status: 'none');
+          final xaiData = _extractXai(cloudData, defaultKind: 'heatmap_overlay');
+
+          // Persist XAI URL to SharedPreferences BEFORE returning.
+          // PowerSync will overwrite the local scan_results row (xai_path column)
+          // from Supabase within seconds — the backend does not save xai_path to
+          // the database. SharedPreferences is never touched by PowerSync, so the
+          // URL survives all subsequent sync operations.
+          final cxrScanId = cloudData['scan_id']?.toString();
+          if (cxrScanId != null) {
+            XAICacheService.saveUrl(cxrScanId, xaiData.url);
           }
 
             return DiagnosticResult(
-              id: cloudData['scan_id'] ?? const Uuid().v4(),
+              id: cxrScanId ?? const Uuid().v4(),
               scanDate: DateTime.now(),
               imagePath: imageFile.path,
               scanType: 'Chest X-Ray',
@@ -228,8 +315,6 @@ final analyzeECGProvider = Provider((ref) {
           bool isRedAlert = false;
           List<String> activeTags = [];
           String topDiagnosis = 'Unknown';
-          String? extractedHeatmap;
-          String? dominantLeadsStr;
 
           int overallScanStatus = -1;
 
@@ -242,23 +327,32 @@ final analyzeECGProvider = Provider((ref) {
                 
                 final statusVal = value['scan_status'];
                 int? scanStatusInt;
-                if (statusVal is int) scanStatusInt = statusVal;
-                else if (statusVal is String) scanStatusInt = int.tryParse(statusVal);
+                if (statusVal is int) {
+                  scanStatusInt = statusVal;
+                } else if (statusVal is String) scanStatusInt = int.tryParse(statusVal);
                 
                 String risk = 'Moderate'; // Default if unrecognized
                 if (scanStatusInt != null) {
-                  if (scanStatusInt == 2) risk = 'High';
-                  else if (scanStatusInt == 1) risk = 'Moderate';
+                  if (scanStatusInt == 2) {
+                    risk = 'High';
+                  } else if (scanStatusInt == 1) risk = 'Moderate';
                   else if (scanStatusInt == 0) risk = 'Normal';
                 } else {
                   final rawRisk = value['risk_level']?.toString().toUpperCase() ?? value['confidence']?.toString().toUpperCase();
                   if (rawRisk != null) {
-                    if (rawRisk == 'HIGH' || rawRisk == 'CRITICAL') risk = 'High';
-                    else if (rawRisk == 'MODERATE' || rawRisk == 'WARNING') risk = 'Moderate';
+                    if (rawRisk == 'HIGH' || rawRisk == 'CRITICAL') {
+                      risk = 'High';
+                    } else if (rawRisk == 'MODERATE' || rawRisk == 'WARNING') risk = 'Moderate';
                     else risk = 'Normal';
                   } else {
                     if (key.toUpperCase() == 'NORM' || !isDetected) {
                       risk = 'Normal';
+                    } else if (prob > 0.65) {
+                      risk = 'High';
+                    } else if (prob > 0.35) {
+                      risk = 'Moderate';
+                    } else {
+                      risk = 'Low';
                     }
                   }
                 }
@@ -287,8 +381,9 @@ final analyzeECGProvider = Provider((ref) {
           }
           if (cloudData.containsKey('scan_status') && cloudData['scan_status'] != null) {
             final statusRaw = cloudData['scan_status'];
-            if (statusRaw is int) overallScanStatus = statusRaw;
-            else if (statusRaw is String) overallScanStatus = int.tryParse(statusRaw) ?? -1;
+            if (statusRaw is int) {
+              overallScanStatus = statusRaw;
+            } else if (statusRaw is String) overallScanStatus = int.tryParse(statusRaw) ?? -1;
             isRedAlert = overallScanStatus == 2;
           }
           if (cloudData.containsKey('primary_diagnosis') && cloudData['primary_diagnosis'] != null) {
@@ -314,20 +409,16 @@ final analyzeECGProvider = Provider((ref) {
             ));
           }
 
-          final explain = cloudData['explainability'];
-          XAIInfo? xaiData;
-          if (explain is Map) {
-            xaiData = XAIInfo(
-              status: explain['status']?.toString() ?? 'none',
-              kind: 'integrated_gradients',
-              url: explain['url']?.toString(),
-            );
-          } else {
-            xaiData = XAIInfo(status: 'none');
+          final xaiData = _extractXai(cloudData, defaultKind: 'integrated_gradients');
+
+          // Persist XAI URL to SharedPreferences — survives PowerSync sync-downs.
+          final ecgScanId = cloudData['scan_id']?.toString();
+          if (ecgScanId != null) {
+            XAICacheService.saveUrl(ecgScanId, xaiData.url);
           }
 
             return DiagnosticResult(
-              id: cloudData['scan_id'] ?? const Uuid().v4(),
+              id: ecgScanId ?? const Uuid().v4(),
               scanDate: DateTime.now(),
               imagePath: imageFile.path,
               scanType: 'ECG',
@@ -388,7 +479,6 @@ final analyzeSkinProvider = Provider((ref) {
           double highestConfidence = 0.0;
           bool isRedAlert = false;
           List<String> activeTags = [];
-          String? extractedHeatmap;
           String topDiagnosis = 'Unknown';
 
           final findingsList = (cloudData['predictions'] ?? cloudData['top_findings']) as List<dynamic>? ?? [];
@@ -402,27 +492,37 @@ final analyzeSkinProvider = Provider((ref) {
             final apiRisk = cloudData['risk_assessment'];
             final statusVal = finding['scan_status'];
             int? scanStatusInt;
-            if (statusVal is int) scanStatusInt = statusVal;
-            else if (statusVal is String) scanStatusInt = int.tryParse(statusVal);
+            if (statusVal is int) {
+              scanStatusInt = statusVal;
+            } else if (statusVal is String) scanStatusInt = int.tryParse(statusVal);
             
             String risk = 'Moderate'; // Default if unrecognized
             if (scanStatusInt != null) {
-              if (scanStatusInt == 2) risk = 'High';
-              else if (scanStatusInt == 1) risk = 'Moderate';
+              if (scanStatusInt == 2) {
+                risk = 'High';
+              } else if (scanStatusInt == 1) risk = 'Moderate';
               else if (scanStatusInt == 0) risk = 'Normal';
             } else {
               final rawRisk = finding['risk_level']?.toString().toUpperCase();
               if (rawRisk != null) {
-                if (rawRisk == 'HIGH' || rawRisk == 'CRITICAL') risk = 'High';
-                else if (rawRisk == 'MODERATE' || rawRisk == 'WARNING') risk = 'Moderate';
+                if (rawRisk == 'HIGH' || rawRisk == 'CRITICAL') {
+                  risk = 'High';
+                } else if (rawRisk == 'MODERATE' || rawRisk == 'WARNING') risk = 'Moderate';
                 else risk = 'Normal';
               } else if (apiRisk != null) {
-                if (apiRisk == 'MALIGNANT_RISK') risk = 'High';
-                else if (apiRisk == 'BENIGN_LIKELY') risk = 'Normal';
+                if (apiRisk == 'MALIGNANT_RISK') {
+                  risk = 'High';
+                } else if (apiRisk == 'BENIGN_LIKELY') risk = 'Normal';
                 else risk = 'Moderate';
               } else {
-                if (label.toLowerCase().contains('benign') || label.toLowerCase() == 'normal') {
+                if (label.toLowerCase().contains('benign') || label.toLowerCase().contains('normal') || label.toLowerCase().contains('no finding')) {
                   risk = 'Normal';
+                } else if (conf > 0.65) {
+                  risk = 'High';
+                } else if (conf > 0.35) {
+                  risk = 'Moderate';
+                } else {
+                  risk = 'Low';
                 }
               }
             }
@@ -449,8 +549,9 @@ final analyzeSkinProvider = Provider((ref) {
           }
           if (cloudData.containsKey('scan_status') && cloudData['scan_status'] != null) {
             final statusRaw = cloudData['scan_status'];
-            if (statusRaw is int) overallScanStatus = statusRaw;
-            else if (statusRaw is String) overallScanStatus = int.tryParse(statusRaw) ?? -1;
+            if (statusRaw is int) {
+              overallScanStatus = statusRaw;
+            } else if (statusRaw is String) overallScanStatus = int.tryParse(statusRaw) ?? -1;
             isRedAlert = overallScanStatus == 2;
           }
           if (cloudData.containsKey('primary_diagnosis') && cloudData['primary_diagnosis'] != null) {
@@ -461,20 +562,16 @@ final analyzeSkinProvider = Provider((ref) {
             if (activeTags.isEmpty) activeTags.add(topDiagnosis);
           }
 
-          final explain = cloudData['explainability'];
-          XAIInfo? xaiData;
-          if (explain is Map) {
-            xaiData = XAIInfo(
-              status: explain['status']?.toString() ?? 'none',
-              kind: 'heatmap_overlay',
-              url: explain['url']?.toString(),
-            );
-          } else {
-            xaiData = XAIInfo(status: 'none');
+          final xaiData = _extractXai(cloudData, defaultKind: 'heatmap_overlay');
+
+          // Persist XAI URL to SharedPreferences — survives PowerSync sync-downs.
+          final skinScanId = cloudData['scan_id']?.toString();
+          if (skinScanId != null) {
+            XAICacheService.saveUrl(skinScanId, xaiData.url);
           }
 
             return DiagnosticResult(
-              id: cloudData['scan_id'] ?? const Uuid().v4(),
+              id: skinScanId ?? const Uuid().v4(),
               scanDate: DateTime.now(),
               imagePath: imageFile.path,
               scanType: 'Skin Lesion',
@@ -527,7 +624,7 @@ final analyzeSkinProvider = Provider((ref) {
 
           if (confidence > 0.65) {
             risk = 'High';
-            if (diseaseName == 'Melanoma' || diseaseName == 'Basal Cell Carcinoma') {
+            if (diseaseName.toLowerCase() == 'melanoma' || diseaseName.toLowerCase() == 'basal cell carcinoma') {
               redAlertTriggered = true;
             }
           } else if (confidence > 0.35) {
@@ -555,7 +652,8 @@ final analyzeSkinProvider = Provider((ref) {
         activeTags.add(topDiagnosis);
       }
 
-      int scanStatus = redAlertTriggered ? 2 : (highestConfidence > 0.6 && topDiagnosis != 'Benign' ? 1 : 0);
+      bool isBenignOrNormal = topDiagnosis.toLowerCase().contains('benign') || topDiagnosis.toLowerCase().contains('normal');
+      int scanStatus = redAlertTriggered ? 2 : (highestConfidence > 0.6 && !isBenignOrNormal ? 1 : 0);
 
       return DiagnosticResult(
         id: const Uuid().v4(),

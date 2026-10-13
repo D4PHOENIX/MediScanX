@@ -155,7 +155,7 @@ class TriageDashboardScreen extends ConsumerWidget {
                           itemCount: scans.length,
                           separatorBuilder: (_, __) => const SizedBox(height: 12),
                           itemBuilder: (context, index) {
-                            return _buildTriageCard(context, scans[index]);
+                            return _buildTriageCard(context, ref, scans[index]);
                           },
                         );
                       },
@@ -232,7 +232,7 @@ class TriageDashboardScreen extends ConsumerWidget {
     );
   }
 
-  Widget _buildTriageCard(BuildContext context, TriageItem item) {
+  Widget _buildTriageCard(BuildContext context, WidgetRef ref, TriageItem item) {
     final riskLabel = _riskLabel(item.scanStatus);
     final riskColor = _riskColor(item.scanStatus);
     final typeLabel = _scanTypeLabel(item.modality);
@@ -257,10 +257,17 @@ class TriageDashboardScreen extends ConsumerWidget {
                           'Authorization': 'Bearer ${Supabase.instance.client.auth.currentSession?.accessToken}'
                         },
                         errorBuilder: (context, error, stackTrace) {
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            ref.read(triageQueueProvider.notifier).removeScan(item.scanId);
+                          });
                           return Container(
                             color: Colors.white,
                             padding: const EdgeInsets.all(20),
-                            child: const Text('Failed to load image. Ensure you have internet access.'),
+                            child: const Text(
+                              'Patient access revoked.\nThis record has been automatically removed from your queue.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: Colors.redAccent),
+                            ),
                           );
                         },
                       ),

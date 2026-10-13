@@ -1,3 +1,38 @@
+/// Model for a single care relationship row returned by
+/// GET /api/v1/patients/care-relationships
+class CareRelationship {
+  final String id;           // UUID string
+  final String doctorName;
+  final String specialisation;
+  final String hospital;
+  final DateTime? expiresAt;
+  final bool isActive;
+
+  CareRelationship({
+    required this.id,
+    required this.doctorName,
+    required this.specialisation,
+    required this.hospital,
+    this.expiresAt,
+    required this.isActive,
+  });
+
+  factory CareRelationship.fromJson(Map<String, dynamic> json) {
+    return CareRelationship(
+      id: json['id']?.toString() ?? '',
+      // Exact field names from backend Swagger schema
+      doctorName:        json['doctor_full_name']        as String? ?? '—',
+      specialisation:    json['doctor_specialization']   as String? ?? '—',
+      hospital:          json['doctor_current_hospital'] as String? ?? '—',
+      expiresAt: json['expires_at'] != null
+          ? DateTime.tryParse(json['expires_at'].toString())?.toLocal()
+          : null,
+      // Backend returns both is_active (bool) and status (string)
+      isActive: json['is_active'] == true || json['status'] == 'active',
+    );
+  }
+}
+
 class ReferralResponse {
   final String patientId;
   final String signedUrl;
