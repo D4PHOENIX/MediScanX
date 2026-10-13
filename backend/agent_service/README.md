@@ -1,96 +1,109 @@
-# Agent Service
+# agent_service
 
-## Domain Summary
+The MediScanX clinical assistant: a LangGraph agent on Google Gemini that answers questions about a patient's results and general medical questions, grounded in a retrieval corpus of thoracic and pulmonary literature. Internal only — clients reach it through `POST /api/v1/agent/chat` on the gateway.
 
-The Agentic AI Orchestrator (`agent_service`) serves as the central reasoning engine for MediScanX. Utilizing a cyclic tool-calling architecture powered by `langgraph` and `langchain-google-genai`, it orchestrates complex medical query workflows. It coordinates downstream multi-modal inference services (`cxr_service`, `ecg_service`, `skin_service`), executes clinical RAG (Retrieval-Augmented Generation) against a Supabase pgvector database, and computes temporal disease progression. Communication with the API Gateway is handled efficiently via Server-Sent Events (SSE), streaming reasoning chunks and UI triggers asynchronously.
+FastAPI · Python 3.11 · LangGraph · langchain-google-genai · psycopg / asyncpg · transformers (MedCPT) · pgvector
 
-## Quickstart: Local Reproducibility
+## Layout
 
-### Prerequisites
+```
+src/app/
+├── main.py                 lifespan: DB pool, graph build, checkpointer setup
+├── api/routes.py           POST /chat (SSE)
+├── api/stream_mapper.py    LangGraph events → SSE frames
+├── api/health.py           GET /, /healthz, /ready
+├── agent/graph.py          system prompt, tool registry, graph wiring
+├── agent/state.py          AgentState
+├── agent/powersync.py      writes final messages to chat_messages
+├── agent/tools/            rag_tool, ml_tools, temporal, fusion, labels
+└── core/                   config, security, exceptions, embedding_contract
+```
 
-- Python 3.10+
-- `uv` (for fast Python package installation)
-- Docker & Docker Compose
-- Supabase (Local or Cloud) instance with `pgvector` enabled
+## The graph
 
-### Local Setup
+```
+request ─► agent (Gemini, 9 tools bound) ──tool_calls──► tools (ToolNode) ──┐
+                 ▲                                                          │
+                 └──────────────────────────────────────────────────────────┘
+           agent ──final answer──► sync_powersync ─► END
+```
+
+- **Model:** `ChatGoogleGenerativeAI`, `temperature=0`, streaming; the model name comes from `GOOGLE_MODEL`.
+- **State:** `AgentState(MessagesState)` with `patient_id`, `current_scan_id`, `execution_step`, `multimodal_metadata`, `rag_citations`; messages accumulate through the `add_messages` reducer.
+- **Memory:** `AsyncPostgresSaver` checkpoints the full state per `thread_id` into the `checkpoints*` tables. The system prompt is injected only on the first turn of a thread.
+- **Display copy:** `sync_powersync` writes the user and assistant text, with citations, to `chat_messages`, which PowerSync replicates to the phone.
+
+## System prompt rules
+
+1. Search the clinical knowledge base first for every medical question.
+2. Synthesise and cite document titles when results are relevant.
+3. When retrieval finds nothing useful, answer from general knowledge behind a fixed disclaimer.
+4. Never refuse a medical question; never diagnose definitively ("findings suggestive of").
+5. Flag fused risk ≥ 0.85 as CRITICAL; say plainly when a label is missing or a trend is indeterminate.
+
+## Tools
+
+| Tool | Purpose |
+|---|---|
+| `search_clinical_guidelines(query, finding_label?)` | Glossary match + MedCPT vector search (+ optional rerank); returns citations |
+| `run_cxr_inference`, `run_ecg_inference`, `run_skin_inference` (`scan_id`) | Re-run a model on one of the caller's stored scans |
+| `list_recent_scans(limit)` | The caller's most recent scans |
+| `calculate_temporal_progression(current_scan_id, previous_scan_id?)` | `improving` / `worsening` / `unchanged` / `changed` / `indeterminate`, with confidence delta and days between |
+| `query_patient_metrics()` | The caller's profile |
+| `fuse_multimodal_findings(...)` | Weighted multimodal risk (same rules as the gateway) |
+| `orchestrate_fusion(scan_ids)` | Load selected scans, then fuse them |
+
+**Tenant isolation:** the user id is never a model-filled argument. The route injects `auth_user_id` from the verified JWT into the run config, and every tool filters its SQL by it. `/chat` also rejects a `patient_id` that differs from the token and a `thread_id` owned by someone else (403).
+
+## Retrieval
+
+Single source of truth: `core/embedding_contract.py`.
+
+| Setting | Value |
+|---|---|
+| Query encoder | `ncbi/MedCPT-Query-Encoder` ([CLS] pooling, L2-normalised) |
+| Corpus encoder | `ncbi/MedCPT-Article-Encoder` (offline seeder; the two encoders only work as a pair) |
+| Reranker | `ncbi/MedCPT-Cross-Encoder`, enabled with `RERANK_ENABLED=true` |
+| Dimension / max length | 768 / 512 tokens |
+
+Per query: an exact glossary lookup when a finding label is supplied, then `match_rag_corpus($1::halfvec(768), 0.1, 20, NULL, 'thoracic')` — a deliberately low similarity floor for recall — then, when enabled, a cross-encoder rerank to the top 5. The corpus (`rag_corpus`, 49,875 rows: PubMed 30,016, textbooks 16,022, Open-i reports 3,826, glossary 11) is built by `notebooks/rag-corpus-seeder.ipynb`. Models load once per process.
+
+## Streaming
+
+`stream_mapper.py` maps `astream_events(version="v2")` to SSE:
+
+| Event | When |
+|---|---|
+| `text` | each generated token |
+| `ui_trigger` (`tool_call`, `cxr_result`, `result`, `pdf_generated`) | a complete tool call or a tool result the app should render |
+| `error` | a typed failure |
+| `: keepalive` | every 15 s of silence, so proxies keep the connection open |
+
+## Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/chat` | `{messages, patient_id?, thread_id?, current_scan_id?, execution_step?, multimodal_metadata?}` → `text/event-stream` |
+| GET | `/healthz` · `/ready` · `/` | liveness, readiness (graph compiled), metadata |
+
+## Configuration
+
+| Variable | Purpose |
+|---|---|
+| `GEMINI_API_KEY`, `GOOGLE_MODEL` | LLM |
+| `DATABASE_URL` | Postgres for tools and the checkpointer — Supabase **session pooler** (set from `AGENT_DATABASE_URL` in Compose) |
+| `SUPABASE_URL`, `SUPABASE_SECRET_KEY` | Storage downloads for the inference tools; JWKS issuer |
+| `CXR_SERVICE_URL`, `ECG_SERVICE_URL`, `SKIN_SERVICE_URL` | Internal model services |
+| `RERANK_ENABLED` | Cross-encoder rerank (default off) |
+| `HOST`, `PORT` | Default `0.0.0.0:8005` |
+| `DEV_MODE`, `DEV_TOKEN_SECRET` | Local testing only |
+
+## Run and test
 
 ```bash
-# Sync dependencies and create virtual environment automatically
-uv sync
-
-# Set required environment variables
-export GEMINI_API_KEY="your_api_key_here"
-export GOOGLE_MODEL="gemini-3.5-flash"
-export DATABASE_URL="postgresql://..."
-export SUPABASE_URL="https://xyz.supabase.co"
-export SUPABASE_SERVICE_ROLE_KEY="eyJhbGci..."
-export CXR_SERVICE_URL="http://localhost:8001/predict"
-export ECG_SERVICE_URL="http://localhost:8002/predict"
-export SKIN_SERVICE_URL="http://localhost:8003/predict"
-
-# Start the development server using uv run
-PYTHONPATH=src uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8005
+uv sync --all-extras
+uv run uvicorn app.main:app --app-dir src --reload --port 8005
+uv run pytest -q                      # 86 passed
 ```
 
-### Docker Usage
-
-The service is containerized using a multi-stage Docker build optimized with `uv` for fast, cached dependency installations.
-
-```bash
-docker build -t mediscanx-agent-service .
-docker run -p 8005:8005 --env-file .env mediscanx-agent-service
-```
-
-### CI/CD Pipeline
-
-A GitHub Actions pipeline (`.github/workflows/agent-service.yml`) automatically runs on pull requests to the `dev` and `main` branches.
-It includes two jobs:
-
-1. **Test**: Runs the `pytest` suite using `uv`.
-2. **Docker Build**: Validates the multi-stage Docker build (dry-run, no push) and performs a smoke test on the entrypoint.
-
-## Input / Output Matrix (Payload Schemas)
-
-The primary interaction mode with the `agent_service` is via the chat streaming endpoint, which utilizes Server-Sent Events (SSE). The Input/Output Matrix below clearly defines the consumption contract.
-
-### Input Schema (`ChatRequest`)
-
-Submitted via HTTP POST to the streaming endpoint `/chat`.
-
-```json
-{
-    "messages": [{ "role": "user", "content": "Analyze chest X-ray for patient 123" }],
-    "patient_id": "123",
-    "current_scan_id": "scan-xyz",
-    "execution_step": "initial",
-    "multimodal_metadata": {}
-}
-```
-
-### Server-Sent Events (SSE) Output Matrix
-
-The server responds with a `text/event-stream` returning JSON payload chunks. Clients must parse the `event` type and the corresponding JSON `data`.
-
-| Event Type   | Description                                                                          | JSON Payload Format                                                                                                                                                                                                                       |
-| ------------ | ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `text`       | Streamed text chunks from the LLM reasoning process.                                 | `{"text": "I am analyzing the patient's records... "}`                                                                                                                                                                                    |
-| `ui_trigger` | Fired when the agent invokes a tool or returns an inference result to update the UI. | `{"type": "tool_call", "id": "call_abc123", "tool": "run_cxr_inference", "args": {"image_path_or_id": "scan-xyz"}}` OR `{"type": "cxr_result", "findings": "Cardiomegaly detected"}` OR `{"type": "pdf_generated", "url": "https://..."}` |
-| `error`      | Terminal or non-terminal error events encountered during execution.                  | `{"error": true, "type": "ContextRetrievalError", "message": "Failed to fetch vector embeddings.", "context": {}}` OR `{"detail": "Unexpected error string"}`                                                                             |
-| `done`       | Signals the end of the SSE stream.                                                   | `{}`                                                                                                                                                                                                                                      |
-
-## Custom Error Mapping Framework
-
-The application implements a robust exception hierarchy rooted in `AgentBaseException` to categorize and handle orchestrator-level failures efficiently.
-
-| Exception Class              | Description                                                             |
-| ---------------------------- | ----------------------------------------------------------------------- |
-| `AgentBaseException`         | Base domain exception for the Agentic AI Orchestrator.                  |
-| `LLMInferenceError`          | The LLM provider returned an error or timed out.                        |
-| `ToolExecutionError`         | A registered tool failed during execution.                              |
-| `UpstreamServiceUnavailable` | A downstream medical API is unreachable or returned a non-200 response. |
-| `AgentStateCorrupted`        | The agent's internal state graph is inconsistent.                       |
-| `LLMProviderError`           | The LLM provider encountered an error.                                  |
-| `StateGraphExecutionError`   | Error during state graph execution.                                     |
-| `ContextRetrievalError`      | Error retrieving clinical context or guidelines.                        |
-| `AgentEngineNotReadyError`   | The agent engine is not ready to process requests.                      |
+The first start downloads the MedCPT models from Hugging Face.
