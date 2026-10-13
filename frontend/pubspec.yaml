@@ -22,6 +22,7 @@ dependencies:
   # State Management - Riverpod
   riverpod: ^2.4.0
   flutter_riverpod: ^2.6.1
+  riverpod_annotation: ^2.3.0
   riverpod_generator: ^2.3.0
 
   # Database - Drift ORM (SQLite)
@@ -79,6 +80,7 @@ dev_dependencies:
   riverpod_generator: ^2.3.0
   build_runner: ^2.4.0
   drift_dev: ^2.14.0
+  flutter_launcher_icons: ^0.14.4
 
 flutter:
   uses-material-design: true
@@ -88,7 +90,7 @@ flutter:
     - assets/images/logo_full.png
     - assets/images/logo_icon.png
     - assets/models/cxr_model/cxr_model.tflite
-    - assets/models/skin_model/skin_model.tflite
+    - assets/models/skin_model/skin_multidomain_fp32.tflite
 
 flutter_launcher_icons:
   android: "launcher_icon"

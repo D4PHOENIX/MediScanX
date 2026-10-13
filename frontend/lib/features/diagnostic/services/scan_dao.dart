@@ -40,6 +40,8 @@ class ScanDao {
       'scan_status': result.scanStatus,
       'tags': result.tags,
       'findings': result.findings.map((f) => f.toJson()).toList(),
+      if (result.xai != null) 'xai': result.xai!.toJson(),
+      if (result.xai != null) 'explainability': result.xai!.toJson(),
     });
 
     // 🔴 THE FIX: Use Drift's safe Companion insertion to handle DateTime/String mapping correctly
@@ -52,6 +54,8 @@ class ScanDao {
         modality: Value(_mapScanTypeToModality(result.scanType)),
         scanStatus: result.scanStatus,
         imageUrl: Value(result.imagePath),
+        xaiPath: Value(result.xai?.url),
+        xaiStatus: Value(result.xai?.status),
         aiDiagnosis: Value(result.tags.isNotEmpty ? result.tags.first : 'Analyzed'),
         findings: Value(result.recommendation),
         confidence: Value(result.overallConfidence),

@@ -211,9 +211,10 @@ def test_trends_unrecognised_label(auth_headers, app_state_override):
     run_trends_transition_test(auth_headers, "Unknown Disease", "No Finding", "indeterminate")
 
 def test_trends_normal_to_different_normal_returns_unchanged(auth_headers, app_state_override):
-    # normal → different normal produces unchanged, not changed
+    # Dermatofibroma and Vascular lesions are both abnormal (findings) after the label fix.
+    # Two different abnormal skin labels → "changed" (not "unchanged").
     run_trends_transition_test(
-        auth_headers, "Dermatofibroma", "Vascular lesions", "unchanged", modality="skin"
+        auth_headers, "Dermatofibroma", "Vascular lesions", "changed", modality="skin"
     )
 
 def test_trends_large_conf_delta_does_not_alter_direction(auth_headers, app_state_override):
@@ -375,164 +376,340 @@ def valid_claim_token():
     }
     return jwt.encode(payload, gateway_config.report_token_secret, algorithm="HS256"), payload["sub"]
 
-def test_claim_valid_token_no_prior_relationship(auth_headers, app_state_override, valid_claim_token):
-    token, patient_id = valid_claim_token
-    expected_storage_path = f"{patient_id}/{uuid.uuid4()}.pdf"
-    # mock doctor exists, no prior relationship
+
+def setup_claim_mock_conn(expected_storage_path, live_row, last_row, insert_error=None):
+    pool = MagicMock()
+    conn = AsyncMock()
+    
     def fetchval_side_effect(query, *args):
         if "doctor_profiles" in query:
             return True
         return None
+        
     def fetchrow_side_effect(query, *args):
-        # First acquire: reports lookup
         if "FROM reports" in query:
             row = MagicMock()
             row.__getitem__ = lambda self, key: expected_storage_path if key == "storage_path" else None
             row.__bool__ = lambda self: True
             return row
-        # Second acquire: care_relationships lookup — no prior relationship
-        return None
-
-    pool = MagicMock()
-    conn = AsyncMock()
+        elif "status IN ('pending','active')" in query:
+            return live_row
+        elif "status IN ('revoked','declined')" in query:
+            return last_row
+        else:
+            raise AssertionError(f"Unexpected query: {query}")
+            
     conn.fetchval.side_effect = fetchval_side_effect
     conn.fetchrow.side_effect = fetchrow_side_effect
+    conn.transaction = MagicMock(return_value=MockAcquireContextManager(conn))
+    
+    if insert_error:
+        async def execute_side_effect(query, *args):
+            if "INSERT INTO care_relationships" in query:
+                raise insert_error
+        conn.execute.side_effect = execute_side_effect
+        
     pool.acquire.return_value = MockAcquireContextManager(conn)
+    return pool, conn
+
+# C7 no live, no history -> INSERT, granted.
+def test_claim_valid_token_no_prior_relationship(auth_headers, app_state_override, valid_claim_token):
+    token, patient_id = valid_claim_token
+    expected_storage_path = f"{patient_id}/{uuid.uuid4()}.pdf"
+    
+    pool, conn = setup_claim_mock_conn(expected_storage_path, None, None)
+    from app.main import app
     app.state.db_pool = pool
     app.state.supabase_client = MagicMock()
     app.state.supabase_client.storage.from_().create_signed_url = AsyncMock(return_value={"signedURL": "http://fake"})
 
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
     resp = client.post("/api/v1/scans/claim", json={"token": token}, headers=auth_headers)
+    
     assert resp.status_code == 200
     data = resp.json()
     assert data["access_granted"] is True
     assert data["patient_ref"].startswith("PT-")
     assert "user_id" not in data
     assert "name" not in data
-    # assert insert was called
     insert_call = next((call for call in conn.execute.call_args_list if "INSERT INTO care_relationships" in call.args[0]), None)
     assert insert_call is not None
 
+# C1 live active -> granted; assert the UPDATE SQL contains "WHERE id =" and receives the live row's id; no INSERT.
 def test_claim_valid_token_active_relationship(auth_headers, app_state_override, valid_claim_token):
     token, patient_id = valid_claim_token
     expected_storage_path = f"{patient_id}/{uuid.uuid4()}.pdf"
-    def fetchval_side_effect(query, *args):
-        if "doctor_profiles" in query:
-            return True
-        return None
-    def fetchrow_side_effect(query, *args):
-        if "FROM reports" in query:
-            row = MagicMock()
-            row.__getitem__ = lambda self, key: expected_storage_path if key == "storage_path" else None
-            row.__bool__ = lambda self: True
-            return row
-        return {"status": "active", "ended_at": None}
-
-    pool = MagicMock()
-    conn = AsyncMock()
-    conn.fetchval.side_effect = fetchval_side_effect
-    conn.fetchrow.side_effect = fetchrow_side_effect
-    pool.acquire.return_value = MockAcquireContextManager(conn)
+    row_id = uuid.uuid4()
+    live_row = {"id": row_id, "status": "active"}
+    
+    pool, conn = setup_claim_mock_conn(expected_storage_path, live_row, None)
+    from app.main import app
     app.state.db_pool = pool
     app.state.supabase_client = MagicMock()
     app.state.supabase_client.storage.from_().create_signed_url = AsyncMock(return_value={"signedURL": "http://fake"})
 
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
     resp = client.post("/api/v1/scans/claim", json={"token": token}, headers=auth_headers)
+    
     assert resp.status_code == 200
     data = resp.json()
     assert data["access_granted"] is True
     update_call = next((call for call in conn.execute.call_args_list if "UPDATE care_relationships SET expires_at" in call.args[0]), None)
     assert update_call is not None
+    assert "WHERE id = " in update_call.args[0]
+    assert row_id in update_call.args
     insert_call = next((call for call in conn.execute.call_args_list if "INSERT INTO care_relationships" in call.args[0]), None)
     assert insert_call is None
 
+# C2 live pending -> granted; activating UPDATE by id.
+def test_claim_valid_token_pending_relationship(auth_headers, app_state_override, valid_claim_token):
+    token, patient_id = valid_claim_token
+    expected_storage_path = f"{patient_id}/{uuid.uuid4()}.pdf"
+    row_id = uuid.uuid4()
+    live_row = {"id": row_id, "status": "pending"}
+    
+    pool, conn = setup_claim_mock_conn(expected_storage_path, live_row, None)
+    from app.main import app
+    app.state.db_pool = pool
+    app.state.supabase_client = MagicMock()
+    app.state.supabase_client.storage.from_().create_signed_url = AsyncMock(return_value={"signedURL": "http://fake"})
+
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+    resp = client.post("/api/v1/scans/claim", json={"token": token}, headers=auth_headers)
+    
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["access_granted"] is True
+    update_call = next((call for call in conn.execute.call_args_list if "UPDATE care_relationships SET status='active'" in call.args[0]), None)
+    assert update_call is not None
+    assert "WHERE id = " in update_call.args[0]
+    assert row_id in update_call.args
+    insert_call = next((call for call in conn.execute.call_args_list if "INSERT INTO care_relationships" in call.args[0]), None)
+    assert insert_call is None
+
+# Revoked history with ended_at NULL -> denied "revoked" (null ended_at branch).
 def test_claim_valid_token_revoked_relationship(auth_headers, app_state_override, valid_claim_token):
     token, patient_id = valid_claim_token
     expected_storage_path = f"{patient_id}/{uuid.uuid4()}.pdf"
-    def fetchval_side_effect(query, *args):
-        if "doctor_profiles" in query:
-            return True
-        return None
-    def fetchrow_side_effect(query, *args):
-        if "FROM reports" in query:
-            row = MagicMock()
-            row.__getitem__ = lambda self, key: expected_storage_path if key == "storage_path" else None
-            row.__bool__ = lambda self: True
-            return row
-        return {"status": "revoked", "ended_at": None}
-
-    pool = MagicMock()
-    conn = AsyncMock()
-    conn.fetchval.side_effect = fetchval_side_effect
-    conn.fetchrow.side_effect = fetchrow_side_effect
-    pool.acquire.return_value = MockAcquireContextManager(conn)
+    last_row = {"status": "revoked", "ended_at": None}
+    
+    pool, conn = setup_claim_mock_conn(expected_storage_path, None, last_row)
+    from app.main import app
     app.state.db_pool = pool
     app.state.supabase_client = MagicMock()
     app.state.supabase_client.storage.from_().create_signed_url = AsyncMock(return_value={"signedURL": "http://fake"})
 
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
     resp = client.post("/api/v1/scans/claim", json={"token": token}, headers=auth_headers)
+    
     assert resp.status_code == 200
     data = resp.json()
     assert data["access_granted"] is False
     assert data["reason"] == "revoked"
 
-def test_claim_valid_token_ended_at_set(auth_headers, app_state_override, valid_claim_token):
+# C3 no live, last revoked, token iat BEFORE ended_at -> access_granted False, reason "revoked", no INSERT.
+def test_claim_valid_token_ended_at_set(auth_headers, app_state_override):
+    from datetime import datetime, timezone, timedelta
+    from jose import jwt
+    from app.core.config import gateway_config
+    
+    patient_id = str(uuid.uuid4())
+    expected_storage_path = f"{patient_id}/{uuid.uuid4()}.pdf"
+    now_aware = datetime.now(timezone.utc)
+    
+    token_payload = {
+        "sub": patient_id,
+        "scan_ids": [str(uuid.uuid4())],
+        "iat": int((now_aware - timedelta(seconds=60)).timestamp()),
+        "exp": int((now_aware + timedelta(hours=1)).timestamp()),
+        "purpose": "report_claim"
+    }
+    token = jwt.encode(token_payload, gateway_config.report_token_secret, algorithm="HS256")
+    
+    last_row = {"status": "revoked", "ended_at": now_aware}
+    
+    pool, conn = setup_claim_mock_conn(expected_storage_path, None, last_row)
+    from app.main import app
+    app.state.db_pool = pool
+    app.state.supabase_client = MagicMock()
+    app.state.supabase_client.storage.from_().create_signed_url = AsyncMock(return_value={"signedURL": "http://fake"})
+
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+    resp = client.post("/api/v1/scans/claim", json={"token": token}, headers=auth_headers)
+    
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["access_granted"] is False
+    assert data["reason"] == "revoked"
+    insert_call = next((call for call in conn.execute.call_args_list if "INSERT INTO care_relationships" in call.args[0]), None)
+    assert insert_call is None
+
+# C4 no live, last revoked, token iat AFTER ended_at -> INSERT executed, granted.
+def test_claim_token_after_revocation(auth_headers, app_state_override):
+    from datetime import datetime, timezone, timedelta
+    from jose import jwt
+    from app.core.config import gateway_config
+    
+    patient_id = str(uuid.uuid4())
+    expected_storage_path = f"{patient_id}/{uuid.uuid4()}.pdf"
+    now_aware = datetime.now(timezone.utc)
+    
+    token_payload = {
+        "sub": patient_id,
+        "scan_ids": [str(uuid.uuid4())],
+        "iat": int((now_aware + timedelta(seconds=60)).timestamp()),
+        "exp": int((now_aware + timedelta(hours=1)).timestamp()),
+        "purpose": "report_claim"
+    }
+    token = jwt.encode(token_payload, gateway_config.report_token_secret, algorithm="HS256")
+    
+    last_row = {"status": "revoked", "ended_at": now_aware}
+    
+    pool, conn = setup_claim_mock_conn(expected_storage_path, None, last_row)
+    from app.main import app
+    app.state.db_pool = pool
+    app.state.supabase_client = MagicMock()
+    app.state.supabase_client.storage.from_().create_signed_url = AsyncMock(return_value={"signedURL": "http://fake"})
+
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+    resp = client.post("/api/v1/scans/claim", json={"token": token}, headers=auth_headers)
+    
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["access_granted"] is True
+    insert_call = next((call for call in conn.execute.call_args_list if "INSERT INTO care_relationships" in call.args[0]), None)
+    assert insert_call is not None
+
+# C6 no live, last declined, old token -> denied "declined".
+def test_claim_token_declined_old(auth_headers, app_state_override):
+    from datetime import datetime, timezone, timedelta
+    from jose import jwt
+    from app.core.config import gateway_config
+    
+    patient_id = str(uuid.uuid4())
+    expected_storage_path = f"{patient_id}/{uuid.uuid4()}.pdf"
+    now_aware = datetime.now(timezone.utc)
+    
+    token_payload = {
+        "sub": patient_id,
+        "scan_ids": [str(uuid.uuid4())],
+        "iat": int((now_aware - timedelta(seconds=60)).timestamp()),
+        "exp": int((now_aware + timedelta(hours=1)).timestamp()),
+        "purpose": "report_claim"
+    }
+    token = jwt.encode(token_payload, gateway_config.report_token_secret, algorithm="HS256")
+    
+    last_row = {"status": "declined", "ended_at": now_aware}
+    
+    pool, conn = setup_claim_mock_conn(expected_storage_path, None, last_row)
+    from app.main import app
+    app.state.db_pool = pool
+    app.state.supabase_client = MagicMock()
+    app.state.supabase_client.storage.from_().create_signed_url = AsyncMock(return_value={"signedURL": "http://fake"})
+
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+    resp = client.post("/api/v1/scans/claim", json={"token": token}, headers=auth_headers)
+    
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["access_granted"] is False
+    assert data["reason"] == "declined"
+
+
+# C5 no live, last revoked with ended_at set, token WITHOUT iat -> denied "revoked".
+def test_claim_token_without_iat_denied_after_history(auth_headers, app_state_override):
+    from datetime import datetime, timezone, timedelta
+    from jose import jwt
+    from app.core.config import gateway_config
+    import uuid
+    
+    patient_id = str(uuid.uuid4())
+    expected_storage_path = f"{patient_id}/{uuid.uuid4()}.pdf"
+    now_aware = datetime.now(timezone.utc)
+    
+    token_payload = {
+        "sub": patient_id,
+        "scan_ids": [str(uuid.uuid4())],
+        "exp": int((now_aware + timedelta(hours=1)).timestamp()),
+        "purpose": "report_claim"
+    }
+    token = jwt.encode(token_payload, gateway_config.report_token_secret, algorithm="HS256")
+    
+    last_row = {"status": "revoked", "ended_at": now_aware}
+    
+    pool, conn = setup_claim_mock_conn(expected_storage_path, None, last_row)
+    from app.main import app
+    app.state.db_pool = pool
+    app.state.supabase_client = MagicMock()
+    app.state.supabase_client.storage.from_().create_signed_url = AsyncMock(return_value={"signedURL": "http://fake"})
+
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
+    resp = client.post("/api/v1/scans/claim", json={"token": token}, headers=auth_headers)
+    
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["access_granted"] is False
+    assert data["reason"] == "revoked"
+    insert_call = next((call for call in conn.execute.call_args_list if "INSERT INTO care_relationships" in call.args[0]), None)
+    assert insert_call is None
+
+# C8 INSERT raises asyncpg.UniqueViolationError -> 409.
+def test_claim_unique_violation(auth_headers, app_state_override, valid_claim_token):
+    import asyncpg
     token, patient_id = valid_claim_token
     expected_storage_path = f"{patient_id}/{uuid.uuid4()}.pdf"
-    def fetchval_side_effect(query, *args):
-        if "doctor_profiles" in query:
-            return True
-        return None
-    def fetchrow_side_effect(query, *args):
-        if "FROM reports" in query:
-            row = MagicMock()
-            row.__getitem__ = lambda self, key: expected_storage_path if key == "storage_path" else None
-            row.__bool__ = lambda self: True
-            return row
-        return {"status": "active", "ended_at": datetime.now(timezone.utc)}
-
-    pool = MagicMock()
-    conn = AsyncMock()
-    conn.fetchval.side_effect = fetchval_side_effect
-    conn.fetchrow.side_effect = fetchrow_side_effect
-    pool.acquire.return_value = MockAcquireContextManager(conn)
+    
+    pool, conn = setup_claim_mock_conn(expected_storage_path, None, None, insert_error=asyncpg.UniqueViolationError())
+    from app.main import app
     app.state.db_pool = pool
     app.state.supabase_client = MagicMock()
     app.state.supabase_client.storage.from_().create_signed_url = AsyncMock(return_value={"signedURL": "http://fake"})
 
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
     resp = client.post("/api/v1/scans/claim", json={"token": token}, headers=auth_headers)
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["access_granted"] is False
-    assert data["reason"] == "revoked"
+    
+    assert resp.status_code == 409
+    assert "Concurrent claim" in resp.json()["detail"]
 
 def test_claim_caller_is_patient(auth_headers, app_state_override, valid_claim_token):
     token, patient_id = valid_claim_token
+    from app.core.security import get_current_user
+    from app.main import app
     app.dependency_overrides[get_current_user] = lambda: patient_id
 
     expected_storage_path = f"{patient_id}/{uuid.uuid4()}.pdf"
     pool = MagicMock()
     conn = AsyncMock()
-    # The reports lookup runs in its own acquire() before the patient short-circuit check.
     def fetchrow_side_effect(query, *args):
         if "FROM reports" in query:
             row = MagicMock()
             row.__getitem__ = lambda self, key: expected_storage_path if key == "storage_path" else None
             row.__bool__ = lambda self: True
             return row
-        return None
+        raise AssertionError(f"Unexpected query: {query}")
     conn.fetchrow.side_effect = fetchrow_side_effect
+    conn.transaction = MagicMock(return_value=MockAcquireContextManager(conn))
     pool.acquire.return_value = MockAcquireContextManager(conn)
     app.state.db_pool = pool
     app.state.supabase_client = MagicMock()
     app.state.supabase_client.storage.from_().create_signed_url = AsyncMock(return_value={"signedURL": "http://fake"})
 
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
     resp = client.post("/api/v1/scans/claim", json={"token": token}, headers=auth_headers)
     assert resp.status_code == 200
     data = resp.json()
     assert data["access_granted"] is False
     assert conn.execute.call_count == 0
-    # fetchrow is now called once (reports lookup) before the caller==patient short-circuit
     assert conn.fetchrow.call_count == 1
     app.dependency_overrides[get_current_user] = lambda: FAKE_USER_ID
 
@@ -549,25 +726,33 @@ def test_claim_caller_not_a_doctor(auth_headers, app_state_override, valid_claim
             row.__getitem__ = lambda self, key: expected_storage_path if key == "storage_path" else None
             row.__bool__ = lambda self: True
             return row
-        return None
+        raise AssertionError(f"Unexpected query: {query}")
 
     pool = MagicMock()
     conn = AsyncMock()
     conn.fetchval.side_effect = fetchval_side_effect
     conn.fetchrow.side_effect = fetchrow_side_effect
+    conn.transaction = MagicMock(return_value=MockAcquireContextManager(conn))
     pool.acquire.return_value = MockAcquireContextManager(conn)
+    from app.main import app
     app.state.db_pool = pool
     app.state.supabase_client = MagicMock()
     app.state.supabase_client.storage.from_().create_signed_url = AsyncMock(return_value={"signedURL": "http://fake"})
 
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
     resp = client.post("/api/v1/scans/claim", json={"token": token}, headers=auth_headers)
     assert resp.status_code == 200
     data = resp.json()
     assert data["access_granted"] is False
     assert conn.execute.call_count == 0
-
+    assert conn.transaction.call_count == 0
 
 def test_claim_expired_token(auth_headers, app_state_override):
+    from datetime import datetime, timedelta
+    from jose import jwt
+    from app.core.config import gateway_config
+    from app.main import app
     app.state.db_pool = MagicMock()
     payload = {
         "sub": str(uuid.uuid4()),
@@ -576,11 +761,16 @@ def test_claim_expired_token(auth_headers, app_state_override):
         "purpose": "report_claim"
     }
     token = jwt.encode(payload, gateway_config.report_token_secret, algorithm="HS256")
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
     resp = client.post("/api/v1/scans/claim", json={"token": token}, headers=auth_headers)
     assert resp.status_code == 403
     assert "expired" in resp.json()["detail"].lower()
 
 def test_claim_wrong_secret(auth_headers, app_state_override):
+    from datetime import datetime, timedelta
+    from jose import jwt
+    from app.main import app
     app.state.db_pool = MagicMock()
     payload = {
         "sub": str(uuid.uuid4()),
@@ -589,11 +779,17 @@ def test_claim_wrong_secret(auth_headers, app_state_override):
         "purpose": "report_claim"
     }
     token = jwt.encode(payload, "wrong_secret", algorithm="HS256")
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
     resp = client.post("/api/v1/scans/claim", json={"token": token}, headers=auth_headers)
     assert resp.status_code == 403
     assert "signature" in resp.json()["detail"].lower()
 
 def test_claim_wrong_purpose(auth_headers, app_state_override):
+    from datetime import datetime, timedelta
+    from jose import jwt
+    from app.core.config import gateway_config
+    from app.main import app
     app.state.db_pool = MagicMock()
     payload = {
         "sub": str(uuid.uuid4()),
@@ -602,10 +798,11 @@ def test_claim_wrong_purpose(auth_headers, app_state_override):
         "purpose": "other_purpose"
     }
     token = jwt.encode(payload, gateway_config.report_token_secret, algorithm="HS256")
+    from fastapi.testclient import TestClient
+    client = TestClient(app)
     resp = client.post("/api/v1/scans/claim", json={"token": token}, headers=auth_headers)
     assert resp.status_code == 403
     assert "purpose" in resp.json()["detail"].lower()
-
 
 def test_triage_returns_scans(auth_headers, app_state_override):
     patient_id = str(uuid.uuid4())
@@ -764,6 +961,7 @@ def test_claim_report_signed_url_ttl(auth_headers, app_state_override, valid_cla
     conn = AsyncMock()
     conn.fetchval.side_effect = fetchval_side_effect
     conn.fetchrow.side_effect = fetchrow_side_effect
+    conn.transaction = MagicMock(return_value=MockAcquireContextManager(conn))
     pool.acquire.return_value = MockAcquireContextManager(conn)
     app.state.db_pool = pool
 
@@ -820,6 +1018,7 @@ def test_claim_report_path_is_never_constructed_from_template(auth_headers, app_
     conn = AsyncMock()
     conn.fetchval.side_effect = fetchval_side_effect
     conn.fetchrow.side_effect = fetchrow_side_effect
+    conn.transaction = MagicMock(return_value=MockAcquireContextManager(conn))
     pool.acquire.return_value = MockAcquireContextManager(conn)
     app.state.db_pool = pool
 

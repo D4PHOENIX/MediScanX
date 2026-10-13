@@ -164,7 +164,7 @@ class AuthStateNotifier extends StateNotifier<AsyncValue<AuthResponse?>> {
 
     // Optional but recommended: Tell PowerSync to disconnect when logging out
     try {
-      await DatabaseManager.powersync.disconnect();
+      await DatabaseManager.powersync.disconnectAndClear();
     } catch (e) {
       debugPrint('PowerSync disconnect error: $e');
     }

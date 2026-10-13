@@ -9,12 +9,7 @@ from typing import Dict, Set
 _NORMAL_LABELS: Dict[str, Set[str]] = {
     "cxr": {"No Finding"},
     "ecg": {"NORM"},
-    "skin": {
-        "Melanocytic nevi",
-        "Benign keratosis-like lesions",
-        "Dermatofibroma",
-        "Vascular lesions",
-    },
+    "skin": {"Normal skin"},
 }
 
 _ABNORMAL_LABELS: Dict[str, Set[str]] = {
@@ -23,11 +18,19 @@ _ABNORMAL_LABELS: Dict[str, Set[str]] = {
         "Enlarged Cardiomediastinum", "Cardiomegaly", "Lung Opacity",
         "Lung Lesion", "Edema", "Consolidation", "Pneumonia",
         "Atelectasis", "Pneumothorax", "Pleural Effusion",
-        "Pleural Other", "Fracture",
+        "Pleural Other", "Fracture", "Support Devices",
         # hierarchical heads
         "Abnormal", "Fluid Accumulation", "Missing Lung Tissue",
-        "Cardiac", "Opacity",
+        "Cardiac", "Opacity", "Other",
     },
     "ecg": {"MI", "STTC", "CD", "HYP"},
-    "skin": {"Melanoma", "Basal cell carcinoma", "Actinic keratoses"},
+    "skin": {
+        "Actinic keratoses",
+        "Basal cell carcinoma",
+        "Benign keratosis-like lesions",
+        "Dermatofibroma",
+        "Melanocytic nevi",
+        "Melanoma",
+        "Vascular lesions",
+    },
 }

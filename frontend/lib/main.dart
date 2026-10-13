@@ -5,12 +5,10 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:app_links/app_links.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:go_router/go_router.dart';
-import 'package:dio/dio.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'features/triage/services/triage_api_service.dart';
 
 // --- NETWORK & CORE CONFIG IMPORTS ---
-import 'package:mediscanx_mobile/core/network/api_client.dart';
 import 'package:mediscanx_mobile/core/config/env_config.dart';
 
 // --- DATABASE, ENGINES & CORE IMPORTS ---
@@ -35,12 +33,12 @@ import 'package:mediscanx_mobile/features/diagnostic/screens/diagnostic_result_s
 import 'package:mediscanx_mobile/features/diagnostic/screens/fusion_result_screen.dart';
 import 'package:mediscanx_mobile/features/diagnostic/presentation/skin_diagnostic_screen.dart';
 import 'package:mediscanx_mobile/features/chat/screens/ai_chat_screen.dart';
+import 'package:mediscanx_mobile/features/chat/screens/chat_history_screen.dart';
 import 'package:mediscanx_mobile/features/chat/models/ai_chat_args.dart';
 import 'package:mediscanx_mobile/features/referral/screens/referral_package_screen.dart';
 import 'package:mediscanx_mobile/features/debug/screens/sync_debug_screen.dart';
 import 'package:mediscanx_mobile/features/triage/screens/triage_dashboard_screen.dart';
 import 'package:mediscanx_mobile/features/referral/screens/care_relationships_screen.dart';
-import 'package:mediscanx_mobile/features/dashboard/screens/temporal_tracking_screen.dart';
 import 'package:mediscanx_mobile/features/diagnostic/services/edge_outbox_service.dart';
 import 'package:mediscanx_mobile/features/downloads/screens/downloads_screen.dart';
 
@@ -447,11 +445,11 @@ final routerProvider = Provider<GoRouter>((ref) {
         name: 'diagnostic',
         builder: (context, state) => const DiagnosticScreen(),
       ),
-      /*GoRoute(
+      GoRoute(
         path: '/care-relationships',
         name: 'care_relationships',
         builder: (context, state) => const CareRelationshipsScreen(),
-      ),*/
+      ),
       GoRoute(
         path: '/fusion-result',
         name: 'fusion_result',
@@ -495,6 +493,11 @@ final routerProvider = Provider<GoRouter>((ref) {
           }
           return const AIChatScreen();
         },
+      ),
+      GoRoute(
+        path: '/chat-history',
+        name: 'chat_history',
+        builder: (context, state) => const ChatHistoryScreen(),
       ),
       GoRoute(
         path: '/downloads',

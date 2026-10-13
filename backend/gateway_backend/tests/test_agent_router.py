@@ -136,3 +136,35 @@ async def test_client_disconnects_mid_stream(auth_headers, mock_http_client):
     # ensure aclose is called!
     assert mock_response.aclose.called
     assert mock_http_client.aclose.called is False
+
+@pytest.mark.asyncio
+async def test_upstream_returns_403(auth_headers, mock_http_client):
+    req_mock = MagicMock()
+    mock_http_client.build_request.return_value = req_mock
+    
+    mock_response = AsyncMock()
+    mock_response.status_code = 403
+    mock_response.aread = AsyncMock(return_value=b'{"detail": "thread_id not owned by caller"}')
+    mock_response.aclose = AsyncMock()
+    mock_http_client.send.return_value = mock_response
+    
+    response = client.post("/api/v1/agent/chat", headers=auth_headers, json={"messages": []})
+    
+    assert response.status_code == 403
+    assert response.json()["detail"] == "thread_id not owned by caller"
+
+@pytest.mark.asyncio
+async def test_upstream_returns_422(auth_headers, mock_http_client):
+    req_mock = MagicMock()
+    mock_http_client.build_request.return_value = req_mock
+    
+    mock_response = AsyncMock()
+    mock_response.status_code = 422
+    mock_response.aread = AsyncMock(return_value=b'{"detail": [{"loc": ["body"], "msg": "field required", "type": "value_error.missing"}]}')
+    mock_response.aclose = AsyncMock()
+    mock_http_client.send.return_value = mock_response
+    
+    response = client.post("/api/v1/agent/chat", headers=auth_headers, json={"messages": []})
+    
+    assert response.status_code == 422
+    assert isinstance(response.json()["detail"], list)

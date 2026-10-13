@@ -5,12 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import uuid
 from typing import Any, AsyncGenerator, Dict, List
 
 import asyncpg
 import psycopg
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
 
@@ -22,14 +21,23 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
-
 #  Helpers
 
 from app.api.stream_mapper import _event_generator
-
-
 from app.core.security import get_current_user
-from fastapi import Depends
+
+
+async def _assert_thread_owned(pool, thread_id: str, patient_uuid: str) -> None:
+    async with pool.acquire() as conn:
+        not_owned = await conn.fetchval(
+            """
+            SELECT EXISTS (SELECT 1 FROM public.chat_messages WHERE thread_id = $1::uuid AND patient_id <> $2::uuid)
+                OR EXISTS (SELECT 1 FROM auth.users          WHERE id        = $1::uuid AND id         <> $2::uuid)
+            """,
+            thread_id, patient_uuid
+        )
+        if not_owned:
+            raise HTTPException(403, "thread_id not owned by caller")
 
 @router.post("")
 async def chat_endpoint(
@@ -39,10 +47,10 @@ async def chat_endpoint(
 ) -> StreamingResponse:
     """Stream assistant responses and tool invocations via SSE.
 
-    The ``thread_id`` sent to the LangGraph checkpointer is derived from
-    ``patient_id``.  This maps each patient's conversation to a distinct
-    row in the ``checkpoints`` table, preventing cross-patient state bleed.
-
+    Identity comes from the JWT (``auth_user_id``). ``thread_id`` is the
+    client-supplied value, verified by ``_assert_thread_owned``, or defaults
+    to the authenticated user's id when omitted.
+    
     Example payload::
 
         {
@@ -65,12 +73,15 @@ async def chat_endpoint(
     # Resolve the compiled graph from app state (set during lifespan startup).
     graph = request.app.state.graph
 
-    patient_uuid = str(payload.patient_id) if payload.patient_id else ""
+    patient_uuid = auth_user_id
+    if payload.patient_id and str(payload.patient_id) != patient_uuid:
+        raise HTTPException(403, "patient_id does not match authenticated user")
+        
     current_scan_uuid = str(payload.current_scan_id) if payload.current_scan_id else ""
+    thread_id = str(payload.thread_id) if payload.thread_id else patient_uuid
 
-    # If patient_id is absent (unauthenticated / dev), fall back to a
-    # one-off UUID that won't accumulate state across requests.
-    thread_id = patient_uuid if patient_uuid else str(uuid.uuid4())
+    if payload.thread_id and str(payload.thread_id) != patient_uuid:
+        await _assert_thread_owned(request.app.state.db_pool, thread_id, patient_uuid)
 
     messages = _to_langchain_messages(payload.messages)
     initial_state: Dict[str, Any] = {

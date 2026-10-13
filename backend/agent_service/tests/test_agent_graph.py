@@ -34,20 +34,20 @@ async def test_thread_id_isolation(test_app, async_client: AsyncClient, auth_hea
 
     test_app.state.graph.astream_events = _capture_config
 
-    for patient_id in ("00000000-0000-0000-0000-00000000000a", "00000000-0000-0000-0000-00000000000b"):
+    for patient_id in ("11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"):
         await async_client.post(
             "/chat",
             json={
                 "messages": [{"role": "user", "content": "Hi"}],
-                "patient_id": patient_id,
+                "thread_id": patient_id,
             },
             headers=auth_headers,
         )
 
     assert len(captured_configs) == 2
     thread_ids = [c["configurable"]["thread_id"] for c in captured_configs]
-    assert thread_ids[0] == "00000000-0000-0000-0000-00000000000a"
-    assert thread_ids[1] == "00000000-0000-0000-0000-00000000000b"
+    assert thread_ids[0] == "11111111-1111-1111-1111-111111111111"
+    assert thread_ids[1] == "22222222-2222-2222-2222-222222222222"
     assert thread_ids[0] != thread_ids[1], "Different patients must have different thread_ids"
 
 
@@ -71,7 +71,7 @@ async def test_engine_not_ready_guard(auth_headers) -> None:
             "/chat",
             json={
                 "messages": [{"role": "user", "content": "test"}],
-                "patient_id": "00000000-0000-0000-0000-000000000eee",
+                "thread_id": "00000000-0000-0000-0000-000000000eee",
             },
             headers=auth_headers,
         )

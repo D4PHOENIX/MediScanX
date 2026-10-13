@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/triage_api_service.dart';
 
@@ -31,6 +32,7 @@ class TriageItem {
   });
 
   factory TriageItem.fromJson(Map<String, dynamic> json) {
+    debugPrint('🟡 [Triage] raw item: $json');
     return TriageItem(
       scanId: json['scan_id'] ?? '',
       modality: json['modality'] ?? 'Unknown',
@@ -49,20 +51,36 @@ class TriageItem {
   }
 }
 
-final triageQueueProvider = FutureProvider<List<TriageItem>>((ref) async {
-  final apiService = ref.watch(triageApiServiceProvider);
-  final rawData = await apiService.getTriageScans(limit: 50);
-  
-  final items = rawData.map((e) => TriageItem.fromJson(e)).toList();
+class TriageQueueNotifier extends AsyncNotifier<List<TriageItem>> {
+  @override
+  Future<List<TriageItem>> build() async {
+    final apiService = ref.watch(triageApiServiceProvider);
+    final rawData = await apiService.getTriageScans(limit: 50);
 
-  // Sorting is primarily handled by backend (worst-first), but we can guarantee client-side sorting just in case
-  items.sort((a, b) {
-    final priority = _riskRank(b.scanStatus).compareTo(_riskRank(a.scanStatus));
-    if (priority != 0) return priority;
-    return b.scanDate.compareTo(a.scanDate);
-  });
+    debugPrint('🟡 [Triage] API returned ${rawData.length} raw items');
 
-  return items;
+    final items = rawData.map((e) => TriageItem.fromJson(e)).toList();
+
+    // Trust the backend — it already filters by active care relationships.
+    // Sorting: worst-first, then newest-first.
+    items.sort((a, b) {
+      final priority = _riskRank(b.scanStatus).compareTo(_riskRank(a.scanStatus));
+      if (priority != 0) return priority;
+      return b.scanDate.compareTo(a.scanDate);
+    });
+
+    return items;
+  }
+
+  void removeScan(String scanId) {
+    if (state.value != null) {
+      state = AsyncData(state.value!.where((s) => s.scanId != scanId).toList());
+    }
+  }
+}
+
+final triageQueueProvider = AsyncNotifierProvider<TriageQueueNotifier, List<TriageItem>>(() {
+  return TriageQueueNotifier();
 });
 
 int _riskRank(int scanStatus) {

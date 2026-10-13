@@ -21,7 +21,7 @@ async def test_sse_compliance(test_app, async_client, auth_headers: AsyncClient)
     response = await async_client.post("/chat", headers=auth_headers,
         json={
             "messages": [{"role": "user", "content": "Analyze patient 123."}],
-            "patient_id": "00000000-0000-0000-0000-000000000123",
+            "thread_id": "00000000-0000-0000-0000-000000000123",
         },
     )
 
@@ -52,7 +52,7 @@ async def test_sse_streaming_error_handling(test_app, async_client, auth_headers
     response = await async_client.post("/chat", headers=auth_headers,
         json={
             "messages": [{"role": "user", "content": "Analyze"}],
-            "patient_id": "00000000-0000-0000-0000-000000000eee",
+            "thread_id": "00000000-0000-0000-0000-000000000eee",
         },
     )
 
@@ -85,7 +85,7 @@ async def test_error_envelope_format(test_app, async_client, auth_headers: Async
     response = await async_client.post("/chat", headers=auth_headers,
         json={
             "messages": [{"role": "user", "content": "test"}],
-            "patient_id": "00000000-0000-0000-0000-000000000fff",
+            "thread_id": "00000000-0000-0000-0000-000000000fff",
         },
     )
 

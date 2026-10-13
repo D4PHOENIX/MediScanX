@@ -56,26 +56,14 @@ const doctorProfilesTable = Table('doctor_profiles', [
   Column.text('sync_status'),
 ]);
 
-// Used for human-to-human messaging (Doctor <-> Patient)
+// AI Chat History
 const chatMessagesTable = Table('chat_messages', [
-  Column.text('message_id'),
-  Column.text('sender_id'),
-  Column.text('recipient_id'),
-  Column.text('message'),
-  Column.integer('message_type'),
-  Column.text('sent_at'),
-  Column.integer('is_read'), // SQLite stores booleans as 0 or 1 integers
-  Column.text('sync_status'),
-]);
-
-// --- NEW: AI Chat History Table ---
-// Matches the LangGraph backend table specifically for the RAG agent
-const langchainChatHistoriesTable = Table('langchain_chat_histories', [
+  Column.text('thread_id'),
   Column.text('patient_id'),
-  Column.text('text'),
   Column.integer('is_user'), // 1 for User, 0 for AI
-  Column.text('created_at'),
+  Column.text('text'),
   Column.text('citations'),  // Store the list of citations as a JSON string
+  Column.text('created_at'),
 ]);
 
 // Offline edge inference outbox — stores results from TFLite that
@@ -96,6 +84,5 @@ const appSchema = Schema([
   scanResultsTable,
   doctorProfilesTable,
   chatMessagesTable,
-  langchainChatHistoriesTable, // Added to the sync engine
   pendingSyncScansTable,
 ]);

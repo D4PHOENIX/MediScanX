@@ -3,11 +3,12 @@
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional, Union
 
 import cv2
 import numpy as np
 import torch
+import torch.nn.functional as F
 import wfdb
 from scipy.interpolate import interp1d
 from scipy.signal import resample
@@ -149,14 +150,19 @@ class _WaveformDigitizer:
         """
         self.cfg: Settings = cfg
 
-    def extract_1d_signal(self, lead_img: np.ndarray) -> Tuple[Optional[np.ndarray], float, bool]:
+    def extract_1d_signal(
+        self,
+        lead_img: np.ndarray,
+        return_raw: bool = False,
+    ) -> Union[Tuple[Optional[np.ndarray], float, bool], Tuple[Optional[np.ndarray], Optional[np.ndarray], float, bool]]:
         """Extract a 1D signal from a binary slice of a lead.
 
         Args:
             lead_img (np.ndarray): Sliced image for a specific lead.
+            return_raw (bool): If True, returns (normalised, raw_waveform, coverage, span_failed).
 
         Returns:
-            Tuple[Optional[np.ndarray], float, bool]: The normalised 1D signal array (or None if failed), fractional coverage, and boolean flag if span fails.
+            Tuple: The normalised 1D signal array (or None if failed), raw waveform if requested, coverage, and span flag.
         """
         height: int
         width: int
@@ -170,7 +176,7 @@ class _WaveformDigitizer:
         coverage: float = float(np.sum(valid_cols) / width)
         
         if np.sum(valid_cols) < 2:
-            return None, coverage, True
+            return (None, None, coverage, True) if return_raw else (None, coverage, True)
 
         y_sums: np.ndarray = np.bincount(x_indices, weights=y_indices, minlength=width)
         y_centers: np.ndarray = y_sums[valid_cols] / col_counts[valid_cols]
@@ -184,7 +190,7 @@ class _WaveformDigitizer:
         
         # Genuine span check: reject if the trace spans less than 50% of the box width
         if span_fraction < 0.5:
-            return None, coverage, True
+            return (None, None, coverage, True) if return_raw else (None, coverage, True)
 
         eval_x: np.ndarray = np.linspace(x_min, x_max, int(x_max - x_min + 1), dtype=np.float32)
         interpolator: interp1d = interp1d(valid_x_arr, raw, kind='linear')
@@ -195,6 +201,8 @@ class _WaveformDigitizer:
         mean_val: np.float64 = np.mean(resampled)
         std_val: np.float64 = np.std(resampled) + 1e-8
         normalised: np.ndarray = (resampled - mean_val) / std_val
+        if return_raw:
+            return normalised.astype(np.float32), resampled.astype(np.float32), coverage, False
         return normalised.astype(np.float32), coverage, False
 
 
@@ -288,22 +296,105 @@ class ECGPreprocessor:
         tensor: torch.Tensor = torch.tensor(signals_2d, dtype=torch.float32).unsqueeze(0)
         return tensor, signals_2d
 
+    def process_wfdb_dualbranch(
+        self, file_path: str
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, np.ndarray]:
+        """Read a WFDB record and extract all three Dual-Branch input tensors.
+
+        Extracts:
+          1. x_morph  : (1, 12, 250) - Z-score normalised 2.5s morphology window.
+          2. x_rhythm : (1, 1, 1000) - Z-score normalised 10.0s continuous Lead II strip.
+          3. x_volt   : (1, 12)      - Physical peak-to-peak voltage amplitudes in mV.
+          4. signals_2d: (12, 250)   - Normalised morphology array, shape (leads, samples),
+                                       used for Grad-CAM overlay rendering.
+
+        Args:
+            file_path (str): Path to WFDB record (with or without file extension).
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor, torch.Tensor, np.ndarray]:
+                (x_morph, x_rhythm, x_volt, signals_2d).
+        """
+        path: Path = Path(file_path)
+        base: Path = path.with_suffix('')
+        if not path.exists() and not (base.with_suffix('.dat')).exists():
+            raise ECGFileReadError(f"ECG record not found: {file_path}")
+
+        try:
+            sig, _ = wfdb.rdsamp(str(base))
+        except Exception as exc:
+            raise ECGFileReadError(
+                f"Failed to read WFDB record {base}: {exc}"
+            ) from exc
+
+        # Physical voltage calibration: if raw ADC integer counts (>25 mV is non-biological),
+        # convert to physical millivolts using typical 1000.0 counts/mV factor.
+        if np.max(np.abs(sig)) > 25.0:
+            sig = sig / 1000.0
+
+        # Safety clamp to prevent aberrant sensor spikes
+        sig = np.clip(sig, -15.0, 15.0)
+
+        # 1. Branch 3: Peak-to-peak voltage vector in physical millivolts (12,)
+        volt_ptp: np.ndarray = np.ptp(sig, axis=0).astype(np.float32)
+        if volt_ptp.shape[0] != self.cfg.num_leads:
+            raise InvalidLeadCountError(f"Expected {self.cfg.num_leads} leads, got {volt_ptp.shape[0]}")
+        volt_tensor: torch.Tensor = torch.tensor(volt_ptp, dtype=torch.float32).unsqueeze(0)
+
+        # 2. Branch 2: Temporal Continuous Lead II Rhythm Strip (1000 samples @ 100 Hz = 10.0 s)
+        lead_idx: int = getattr(self.cfg, "rhythm_lead_idx", 1)
+        rhythm_seq_len: int = getattr(self.cfg, "rhythm_seq_length", 1000)
+        if not (0 <= lead_idx < sig.shape[1]):
+            raise InvalidLeadCountError(
+                f"Invalid rhythm_lead_idx={lead_idx}; WFDB record has {sig.shape[1]} leads."
+            )
+        rhythm_raw: np.ndarray = sig[:, lead_idx: lead_idx + 1]
+        r_mean: np.ndarray = np.mean(rhythm_raw, axis=0)
+        r_std: np.ndarray = np.std(rhythm_raw, axis=0) + 1e-6
+        rhythm_norm: np.ndarray = (rhythm_raw - r_mean) / r_std
+        if rhythm_norm.shape[0] < rhythm_seq_len:
+            rhythm_norm = np.pad(rhythm_norm, ((0, rhythm_seq_len - rhythm_norm.shape[0]), (0, 0)))
+        else:
+            rhythm_norm = rhythm_norm[:rhythm_seq_len]
+        rhythm_tensor: torch.Tensor = torch.tensor(rhythm_norm.T, dtype=torch.float32).unsqueeze(0)
+
+        # 3. Branch 1: Spatial 12-Lead Morphology Segment
+        #    Use morph_seq_length (250 samples = 2.5 s @ 100 Hz) as the single source
+        #    of truth for the morphology window — avoids divergence with cfg.seq_length.
+        morph_len: int = getattr(self.cfg, "morph_seq_length", self.cfg.seq_length)
+        morph_raw: np.ndarray = sig[: morph_len]
+        m_mean: np.ndarray = np.mean(morph_raw, axis=0)
+        m_std: np.ndarray = np.std(morph_raw, axis=0) + 1e-6
+        morph_norm: np.ndarray = (morph_raw - m_mean) / m_std
+        signals_2d: np.ndarray = morph_norm.T.astype(np.float32)
+
+        if signals_2d.shape[0] != self.cfg.num_leads:
+            raise InvalidLeadCountError(f"Expected {self.cfg.num_leads} leads, got {signals_2d.shape[0]}")
+        if signals_2d.shape[1] != morph_len:
+            raise SignalLengthMismatchError(f"Expected length {morph_len}, got {signals_2d.shape[1]}")
+
+        morph_tensor: torch.Tensor = torch.tensor(signals_2d, dtype=torch.float32).unsqueeze(0)
+        return morph_tensor, rhythm_tensor, volt_tensor, signals_2d
+
     def process_image(
         self,
         image_path: str,
         diagnostic_mode: bool = False,
         diagnostic_out_dir: Optional[str] = None,
-    ) -> Tuple[torch.Tensor, np.ndarray]:
+        return_raw: bool = False,
+    ) -> Union[Tuple[torch.Tensor, np.ndarray], Tuple[torch.Tensor, np.ndarray, Optional[np.ndarray]]]:
         """Run the full optical pipeline on a scanned ECG image.
 
         Args:
             image_path (str): Path to the scanned image.
             diagnostic_mode (bool): Whether to output intermediate images.
             diagnostic_out_dir (Optional[str]): Output directory for diagnostic files.
+            return_raw (bool): If True, returns (tensor, signals_2d, raw_signals_2d).
 
         Returns:
             Tuple[torch.Tensor, np.ndarray]: A tuple containing the tensor
                 of shape ``(1, 12, 250)`` and raw signal array of shape ``(12, 250)``.
+                If return_raw is True, returns (tensor, signals_2d, raw_signals_2d).
 
         Raises:
             SignalProcessingError: If optical extraction fails.
@@ -329,17 +420,20 @@ class ECGPreprocessor:
                     extracted_list: List[np.ndarray] = []
                     for lname in lead_order:
                         sig: Optional[np.ndarray] = signals_dict.get(lname)
-                        if sig is not None and len(sig) == self.cfg.seq_length:
-                            extracted_list.append(sig)
+                        if sig is not None:
+                            sig_arr = np.asarray(sig, dtype=np.float32).reshape(-1)
+                            if len(sig_arr) == self.cfg.seq_length:
+                                extracted_list.append(sig_arr)
+                            elif len(sig_arr) > 0:
+                                extracted_list.append(resample(sig_arr, self.cfg.seq_length).astype(np.float32))
                     if len(extracted_list) == self.cfg.num_leads:
-                        signals_2d: np.ndarray = np.stack(
-                            [np.asarray(s, dtype=np.float32).reshape(-1) for s in extracted_list],
-                            axis=0,
-                        )
-                        mean = signals_2d.mean(axis=1, keepdims=True)
-                        std = signals_2d.std(axis=1, keepdims=True) + 1e-8
-                        signals_2d = ((signals_2d - mean) / std).astype(np.float32)
+                        raw_signals_2d: np.ndarray = np.stack(extracted_list, axis=0).astype(np.float32)
+                        mean = raw_signals_2d.mean(axis=1, keepdims=True)
+                        std = raw_signals_2d.std(axis=1, keepdims=True) + 1e-8
+                        signals_2d = ((raw_signals_2d - mean) / std).astype(np.float32)
                         tensor: torch.Tensor = torch.tensor(signals_2d, dtype=torch.float32).unsqueeze(0)
+                        if return_raw:
+                            return tensor, signals_2d, raw_signals_2d
                         return tensor, signals_2d
             except Exception as exc:
                 logger.debug(f"Modular digitizer path skipped: {exc}")
@@ -360,6 +454,7 @@ class ECGPreprocessor:
             'III', 'aVF', 'V3', 'V6',
         ]
         signals_list: List[np.ndarray] = []
+        raw_signals_list: List[np.ndarray] = []
         lead_name: str
         coverages: Dict[str, float] = {}
         span_failures: Dict[str, bool] = {}
@@ -372,7 +467,12 @@ class ECGPreprocessor:
             signal_1d: Optional[np.ndarray]
             cov: float
             span_failed: bool
-            signal_1d, cov, span_failed = self._digitizer.extract_1d_signal(lead_img)
+            if return_raw:
+                signal_1d, raw_1d, cov, span_failed = self._digitizer.extract_1d_signal(lead_img, return_raw=True)
+                if raw_1d is not None:
+                    raw_signals_list.append(raw_1d)
+            else:
+                signal_1d, cov, span_failed = self._digitizer.extract_1d_signal(lead_img)
             
             if signal_1d is not None:
                 signals_list.append(signal_1d)
@@ -407,4 +507,68 @@ class ECGPreprocessor:
             raise SignalLengthMismatchError(f"Expected length {self.cfg.seq_length}, got {signals_2d.shape[1]}")
 
         tensor: torch.Tensor = torch.tensor(signals_2d, dtype=torch.float32).unsqueeze(0)
+        if return_raw:
+            raw_2d = np.stack(raw_signals_list, axis=0).astype(np.float32) if len(raw_signals_list) == self.cfg.num_leads else None
+            return tensor, signals_2d, raw_2d
         return tensor, signals_2d
+
+    def process_image_dualbranch(
+        self,
+        image_path: str,
+        diagnostic_mode: bool = False,
+        diagnostic_out_dir: Optional[str] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, np.ndarray]:
+        """Run optical digitization and construct all three Dual-Branch input tensors.
+
+        Args:
+            image_path (str): Path to scanned ECG image.
+            diagnostic_mode (bool): If True, write diagnostic artifacts.
+            diagnostic_out_dir (Optional[str]): Output directory for diagnostic files.
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor, torch.Tensor, np.ndarray]:
+                (x_morph, x_rhythm, x_volt, signals_2d).
+        """
+        # 1. Run the optical pipeline to get morph_tensor, signals_2d for Grad-CAM,
+        #    and raw (pre-normalisation) pixel waveforms for the voltage branch.
+        res = self.process_image(
+            image_path,
+            diagnostic_mode=diagnostic_mode,
+            diagnostic_out_dir=diagnostic_out_dir,
+            return_raw=True,
+        )
+        if len(res) == 3:
+            morph_tensor, signals_2d, raw_signals_2d = res
+        else:
+            morph_tensor, signals_2d = res
+            raw_signals_2d = None
+
+        if raw_signals_2d is None:
+            # Fallback: signals_2d is already z-scored; voltage values will be
+            # approximately unit-variance but preserve relative lead differences.
+            logger.warning(
+                "Could not obtain raw pixel amplitudes for voltage branch "
+                "(image path: %s). Falling back to z-scored signals_2d. "
+                "Voltage MLP predictions may be less accurate for image inputs.",
+                image_path,
+            )
+            raw_signals_2d = signals_2d
+
+        # 2. Voltage peak-to-peak amplitude from raw (unnormalised) pixel waveform.
+        volt_raw: np.ndarray = np.ptp(raw_signals_2d, axis=1).astype(np.float32)  # (12,)
+        volt_tensor: torch.Tensor = torch.tensor(volt_raw, dtype=torch.float32).unsqueeze(0)  # (1, 12)
+
+        # 3. Branch 2: Rhythm strip interpolated from normalised morph_tensor.
+        lead_idx: int = getattr(self.cfg, "rhythm_lead_idx", 1)
+        rhythm_seq_len: int = getattr(self.cfg, "rhythm_seq_length", 1000)
+        if not (0 <= lead_idx < morph_tensor.shape[1]):
+            raise InvalidLeadCountError(
+                f"Invalid rhythm_lead_idx={lead_idx}; image has {morph_tensor.shape[1]} leads."
+            )
+        lead2 = morph_tensor[:, lead_idx: lead_idx + 1, :]
+        rhythm_tensor = F.interpolate(lead2, size=rhythm_seq_len, mode="linear", align_corners=False)
+
+        return morph_tensor, rhythm_tensor, volt_tensor, signals_2d
+
+
+

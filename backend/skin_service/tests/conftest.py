@@ -10,9 +10,16 @@ Typical usage
 """
 
 import os
+import sys
+from pathlib import Path
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from httpx import ASGITransport, AsyncClient
+
+# Ensure src/ takes precedence over any global modules
+_src_dir = str(Path(__file__).resolve().parent.parent / "src")
+if _src_dir not in sys.path:
+    sys.path.insert(0, _src_dir)
 
 pytest_plugins = ["pytest_asyncio"]
 
@@ -29,7 +36,7 @@ def pytest_configure(config) -> None:
 # ----------------------------------------------------------------
 os.environ.setdefault("SKIN_WEIGHTS_PATH", "/dev/null/mock_skin.pth")
 os.environ.setdefault("DEVICE", "cpu")
-os.environ.setdefault("NUM_CLASSES", "7")
+os.environ.setdefault("NUM_CLASSES", "8")
 os.environ.setdefault("IMAGE_SIZE", "224")
 
 

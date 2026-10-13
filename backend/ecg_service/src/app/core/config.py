@@ -22,12 +22,24 @@ class Settings(BaseSettings):
     onnx_model_path: str = Field(default="/models/ecg_v2_12lead.onnx", alias="ECG_ONNX_PATH")
     
     # ------------------------------------------------------------------
-    # Model parameters — matched to 3rd Experimentation architecture
-    # (PTB-XL 100 Hz, 2.5-second windows, 5 superclasses)
+    # Model parameters — matched to Dual-Branch Multi-Source architecture
+    # (PTB-XL + Georgia, 100 Hz, 2.5s morphology + 10s rhythm strip, 5 superclasses)
     # ------------------------------------------------------------------
     seq_length: int = Field(
         default=250,
         description="Temporal sequence length (250 samples = 2.5 s @ 100 Hz).",
+    )
+    morph_seq_length: int = Field(
+        default=250,
+        description="Spatial morphology window length (250 samples = 2.5 s @ 100 Hz).",
+    )
+    rhythm_seq_length: int = Field(
+        default=1000,
+        description="Temporal continuous Lead II rhythm strip length (1000 samples = 10.0 s @ 100 Hz).",
+    )
+    rhythm_lead_idx: int = Field(
+        default=1,
+        description="Index of Lead II in standard 12-lead order.",
     )
     num_leads: int = Field(default=12, description="Number of ECG leads.")
     num_classes: int = Field(
@@ -39,8 +51,8 @@ class Settings(BaseSettings):
         description="ECG diagnostic superclass labels in model output order.",
     )
     ecg_thresholds: List[float] = Field(
-        default_factory=lambda: [0.49, 0.38, 0.47, 0.49, 0.46],
-        description="Per-class calibrated classification thresholds (Notebook 04b, Fold 9).",
+        default_factory=lambda: [0.51, 0.43, 0.49, 0.52, 0.50],
+        description="Per-class calibrated classification thresholds (Multi-source Dual-Branch, Fold 9).",
     )
     classification_threshold: float = Field(
         default=0.5,
@@ -55,11 +67,11 @@ class Settings(BaseSettings):
         description="Path to the ONNX runtime model binary.",
     )
     ecg_ckpt_path: str = Field(
-        default="/models/mediscanx_ecg_3rdexp_finetuned.ckpt",
+        default="/models/mediscanx-multisource-epoch=00-val_macro_f1=0.7049.ckpt",
         description="Path to the PyTorch Lightning checkpoint file.",
     )
     pytorch_ckpt_path: str = Field(
-        default="/models/mediscanx_ecg_3rdexp_finetuned.ckpt",
+        default="/models/mediscanx-multisource-epoch=00-val_macro_f1=0.7049.ckpt",
         alias="ECG_CKPT_PATH",
         description="Alias for ecg_ckpt_path to support legacy test assertions.",
     )

@@ -694,3 +694,43 @@ async def test_delete_report_not_found_matches_unrelated(auth_headers):
         assert not mock_user_client.table.return_value.delete.called
 
         app.dependency_overrides.clear()
+
+@pytest.mark.asyncio
+async def test_report_claim_token_iat_and_exp():
+    from app.services.report_service import ReportGenerator
+    from app.core.config import gateway_config
+    from jose import jwt
+    import time
+    
+    gen = ReportGenerator()
+    gen._build_pdf_story = MagicMock(return_value=b"fake_pdf")
+    
+    mock_scan_metadata = [{"id": "test-id"}]
+    
+    mock_bucket = AsyncMock()
+    mock_bucket.create_signed_url.return_value = {"signedURL": "https://mediscanx.app/report.pdf"}
+    mock_supabase = MagicMock()
+    mock_supabase.storage.from_.return_value = mock_bucket
+    
+    with patch.object(ReportGenerator, "fetch_patient_header", new_callable=AsyncMock) as mock_header, \
+         patch("app.services.report_service.generate_hedged_text", new_callable=AsyncMock) as mock_hedged, \
+         patch("qrcode.QRCode.add_data") as mock_add_data:
+        mock_header.return_value = {"full_name": "Test Patient", "date_of_birth": "1990-01-01"}
+        mock_hedged.return_value = "Test Summary"
+        
+        await gen.generate_qr_report("test-patient-id", mock_scan_metadata, supabase_client=mock_supabase)
+        
+        # url looks like "https://mediscanx.app/claim?token=..."
+        url = mock_add_data.call_args[0][0]
+        import urllib.parse
+        parsed = urllib.parse.urlparse(url)
+        query_params = urllib.parse.parse_qs(parsed.query)
+        token = query_params["token"][0]
+        
+        payload = jwt.decode(token, gateway_config.report_token_secret, algorithms=["HS256"])
+        
+        assert "iat" in payload
+        assert isinstance(payload["iat"], int)
+        assert "exp" in payload
+        assert payload["exp"] - payload["iat"] == 3600
+        assert abs(payload["iat"] - int(time.time())) < 5

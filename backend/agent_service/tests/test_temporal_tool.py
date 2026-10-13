@@ -124,6 +124,8 @@ async def test_same_label_both_scans_returns_unchanged():
 
 @pytest.mark.asyncio
 async def test_normal_to_different_normal_returns_unchanged():
+    # Melanocytic nevi and Dermatofibroma are now both abnormal (findings) after the label fix.
+    # Two different abnormal skin labels → "changed" (not "unchanged").
     user_id = str(uuid.uuid4())
     curr_id = str(uuid.uuid4())
     prev_id = str(uuid.uuid4())
@@ -135,7 +137,7 @@ async def test_normal_to_different_normal_returns_unchanged():
         
     config = _setup_mock_config(user_id, fetchrow_side_effect=side_effect)
     res = await calculate_temporal_progression.ainvoke({"current_scan_id": curr_id, "previous_scan_id": prev_id}, config=config)
-    assert res["direction"] == "unchanged"
+    assert res["direction"] == "changed"
 
 @pytest.mark.asyncio
 async def test_unrecognised_label_returns_indeterminate():

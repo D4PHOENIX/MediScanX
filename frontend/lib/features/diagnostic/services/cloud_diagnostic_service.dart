@@ -87,24 +87,18 @@ class CloudDiagnosticService {
         debugPrint('✅ [CloudDiagnosticService] Scan successful at $url');
         final parsed = jsonDecode(response.body) as Map<String, dynamic>;
         debugPrint('🔍 [CloudDiagnosticService] Response keys: ${parsed.keys.toList()}');
+        // Dump full response body (first 3000 chars) so we can find the XAI field
+        final bodyDump = response.body.length > 3000 ? response.body.substring(0, 3000) + '...(truncated)' : response.body;
+        debugPrint('📦 [CloudDiagnosticService] FULL RESPONSE: $bodyDump');
         // Log finding-level keys to identify heatmap field name
         final findings = parsed['top_findings'] as List<dynamic>? ?? [];
         if (findings.isNotEmpty) {
           debugPrint('🔍 [CloudDiagnosticService] First finding keys: ${(findings.first as Map).keys.toList()}');
-          // Log heatmap-related values (first 80 chars to avoid flooding)
-          for (final f in findings) {
-            final fMap = f as Map<String, dynamic>;
-            fMap.forEach((key, value) {
-              if (key.toLowerCase().contains('heat') || key.toLowerCase().contains('cam') || key.toLowerCase().contains('map')) {
-                final valStr = value?.toString() ?? 'null';
-                debugPrint('🔥 [CloudDiagnosticService] $key = ${valStr.length > 80 ? '${valStr.substring(0, 80)}... (${valStr.length} chars)' : valStr}');
-              }
-            });
-          }
         } else {
           debugPrint('⚠️ [CloudDiagnosticService] top_findings is empty or missing');
         }
         return parsed;
+
       } else if (response.statusCode >= 400 && response.statusCode < 500) {
         debugPrint('🔴 [CloudDiagnosticService] Backend ${response.statusCode}: ${response.body}');
         try {

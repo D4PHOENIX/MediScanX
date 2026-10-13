@@ -1,9 +1,6 @@
-import 'dart:convert';
 import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/network/api_client.dart';
 import '../models/referral_models.dart';
 
@@ -130,32 +127,4 @@ class ReferralService {
   }
 
   /// Download a file and validate it's actually a PDF
-  Future<bool> _downloadAndValidate(String url, String savePath, String label) async {
-    try {
-      debugPrint('📋 $label: Downloading from $url');
-      await Dio().download(url, savePath);
-      
-      // Validate the file is actually a PDF
-      final file = File(savePath);
-      if (await file.exists() && await file.length() > 4) {
-        final bytes = await file.openRead(0, 5).first;
-        final header = String.fromCharCodes(bytes);
-        if (header.startsWith('%PDF')) {
-          debugPrint('✅ $label: Valid PDF downloaded (${await file.length()} bytes)');
-          return true;
-        } else {
-          debugPrint('⚠️ $label: Downloaded file is NOT a PDF (header: $header). Deleting.');
-          await file.delete();
-        }
-      } else {
-        debugPrint('⚠️ $label: Downloaded file is empty or too small. Deleting.');
-        if (await file.exists()) await file.delete();
-      }
-    } catch (e) {
-      debugPrint('📋 $label: Download failed: $e');
-      // Clean up partial download
-      try { await File(savePath).delete(); } catch (_) {}
-    }
-    return false;
-  }
 }

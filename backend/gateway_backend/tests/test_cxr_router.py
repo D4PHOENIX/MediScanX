@@ -125,17 +125,17 @@ def fake_ml_data():
         "original_img": "data:image/png;base64," + fake_b64,
         "top_findings": [
             {
-                "label": "Infiltrate",
+                "label": "Lung Opacity",
                 "confidence": 0.90,
                 "class_idx": 4,
-                "abbreviation": "INF",
+                "abbreviation": "LO",
                 "overlay_img": fake_b64
             },
             {
-                "label": "Effusion",
+                "label": "Pleural Effusion",
                 "confidence": 0.85,
                 "class_idx": 2,
-                "abbreviation": "EFF"
+                "abbreviation": "PE"
             }
         ]
     }
@@ -303,7 +303,7 @@ async def test_cxr_top_findings_retains_metadata_after_swap(auth_headers, fake_m
         )
         
         metadata = mock_insert.call_args[1]["metadata"]
-        assert metadata["top_findings"][0]["label"] == "Infiltrate"
+        assert metadata["top_findings"][0]["label"] == "Lung Opacity"
         assert metadata["top_findings"][0]["confidence"] == 0.90
         assert metadata["top_findings"][0]["class_idx"] == 4
         assert "overlay_img" not in metadata["top_findings"][0]
@@ -368,7 +368,7 @@ async def test_cxr_overlay_upload_failure(auth_headers, fake_ml_data) -> None:
         assert response.status_code == 200
         kwargs = mock_insert.call_args[1]
         metadata = kwargs["metadata"]
-        assert metadata["top_findings"][0]["label"] == "Infiltrate"
+        assert metadata["top_findings"][0]["label"] == "Lung Opacity"
         # metadata.xai key was removed in Task 1 — xai_status is the sole source of truth.
         assert "xai" not in metadata
         assert kwargs["xai_status"] == "failed"
@@ -382,8 +382,8 @@ async def test_cxr_no_overlays(auth_headers) -> None:
     mock_response = MagicMock(spec=Response)
     mock_response.status_code = 200
     mock_response.json.return_value = {
-        "predicted_diagnoses": ["Normal"],
-        "top_findings": [{"label": "Normal", "confidence": 0.99, "class_idx": 0}]
+        "predicted_diagnoses": ["No Finding"],
+        "top_findings": [{"label": "No Finding", "confidence": 0.99, "class_idx": 0}]
     }
     mock_client.post.return_value = mock_response
     app.state.http_client = mock_client
@@ -451,7 +451,7 @@ async def test_cxr_ai_diagnosis_from_top_findings_invariant(auth_headers) -> Non
         mock_response.json.return_value = {
             "predicted_diagnoses": [],
             "top_findings": [
-                {"label": "Normal", "confidence": 0.5552, "class_idx": 0}
+                {"label": "No Finding", "confidence": 0.5552, "class_idx": 0}
             ]
         }
         
@@ -459,7 +459,7 @@ async def test_cxr_ai_diagnosis_from_top_findings_invariant(auth_headers) -> Non
             files={"file": ("xray.jpg", b"data", "image/jpeg")}, data={"top_k": 1})
         
         kwargs = mock_insert.call_args[1]
-        assert kwargs["ai_diagnosis"] == "Normal"
+        assert kwargs["ai_diagnosis"] == "No Finding"
         assert kwargs["confidence"] == 0.5552
         
         mock_insert.reset_mock()
