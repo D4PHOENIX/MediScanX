@@ -211,7 +211,7 @@ async def build_graph(
 
     # Checkpointer
     # AsyncPostgresSaver maps to the checkpoints / checkpoint_blobs /
-    # checkpoint_writes tables defined in schema/0001_baseline_schema.sql.
+    # checkpoint_writes tables defined in schema/mediscanx_schema.sql.
     import psycopg_pool
 
     await setup_powersync_schema(pool)

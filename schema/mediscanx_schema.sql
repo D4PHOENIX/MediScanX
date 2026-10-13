@@ -1,23 +1,30 @@
 -- =============================================================================
--- MediScanX — Baseline Database Schema
--- Version 0001
+-- MediScanX — Complete Database Schema
 -- Target: PostgreSQL 17 on Supabase
 -- =============================================================================
 --
--- A single, complete, reproducible definition of the MediScanX database.
--- Applying this file to an empty Supabase project produces the full schema:
--- tables, constraints, indexes, functions, triggers, row-level security,
--- storage buckets and their policies, and the PowerSync publication.
+-- A single, complete, reproducible definition of the MediScanX database as it
+-- runs in production. Applying this file to an empty Supabase project produces
+-- the full schema: extensions, tables, constraints, indexes, functions,
+-- triggers, row-level security, storage buckets and their policies, the
+-- PowerSync publication and the scheduled consent-expiry job.
+--
+-- It consolidates the former baseline (0001, covering migrations through 0112)
+-- and migrations 0113–0117, and adds the pg_cron schedule that previously
+-- existed only on the live project. Their history remains in git.
 --
 -- Ordering matters. Sections must run in the order given: extensions before
 -- typed columns, tables before the constraints that reference them, functions
--- before the policies that call them.
+-- before the policies and jobs that call them.
 --
--- The script is idempotent. Every object uses IF NOT EXISTS, OR REPLACE, or a
--- guarded DO block, so re-running it is safe.
+-- The script is idempotent. Every object uses IF NOT EXISTS, OR REPLACE, a
+-- DROP ... IF EXISTS / CREATE pair, or a guarded DO block, so re-running it on
+-- a populated database is safe.
 --
--- Requires a Supabase project: `auth.users` and the `storage` schema must
--- already exist. This is not a plain PostgreSQL script.
+-- Requires a Supabase project: `auth.users`, `auth.uid()`, the `storage`
+-- schema and the `anon`, `authenticated` and `service_role` roles must already
+-- exist, as must the pg_cron extension package (see Section 1 for the
+-- test-database opt-out). This is not a plain PostgreSQL script.
 -- =============================================================================
 
 
@@ -33,6 +40,27 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp"         WITH SCHEMA extensions;
 CREATE EXTENSION IF NOT EXISTS pgcrypto            WITH SCHEMA extensions;
 CREATE EXTENSION IF NOT EXISTS vector              WITH SCHEMA extensions;
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements  WITH SCHEMA extensions;
+
+-- pg_cron schedules the consent-expiry sweep (Section 13). Supabase installs
+-- it into its own schema; no WITH SCHEMA clause is given.
+--
+-- It is required. A database without the pg_cron package fails here, unless
+-- the session explicitly opts out with
+--     SET mediscanx.allow_missing_pg_cron = 'on';
+-- which exists for disposable test databases (CI containers) only. With the
+-- opt-out the schema still builds, has_care_access() still refuses expired
+-- relationships at read time, but no sweep is scheduled, and a WARNING says so.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'pg_cron') THEN
+        CREATE EXTENSION IF NOT EXISTS pg_cron;
+    ELSIF current_setting('mediscanx.allow_missing_pg_cron', true) = 'on' THEN
+        RAISE WARNING 'pg_cron is not available: the expire-care-relationships job will NOT be scheduled (mediscanx.allow_missing_pg_cron = on). Test databases only.';
+    ELSE
+        RAISE EXCEPTION 'pg_cron is required by the MediScanX schema (consent-expiry sweep) but is not available on this server'
+            USING HINT = 'Enable pg_cron in Supabase (Database > Extensions). For a disposable test database only, SET mediscanx.allow_missing_pg_cron = ''on'' before applying.';
+    END IF;
+END $$;
 
 
 -- =============================================================================
@@ -130,6 +158,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS care_rel_one_live
 CREATE INDEX IF NOT EXISTS care_rel_doctor_active
     ON public.care_relationships (doctor_id, patient_id)
     WHERE status = 'active';
+
+COMMENT ON COLUMN public.care_relationships.expires_at IS
+    'The QR-claim path sets a 7-day TTL. The request_care/respond_to_care RPCs leave this NULL (indefinite until revoked).';
 
 
 -- =============================================================================
@@ -563,6 +594,86 @@ AS $function$
 $function$;
 
 
+-- Patient-facing listing of live care relationships, joined with the doctor's
+-- name, specialty and hospital. Resolves the patient from auth.uid(); expiry is
+-- evaluated at read time in is_active.
+CREATE OR REPLACE FUNCTION public.list_care_relationships()
+RETURNS TABLE (
+    id uuid,
+    status text,
+    is_active boolean,
+    created_at timestamptz,
+    activated_at timestamptz,
+    expires_at timestamptz,
+    doctor_full_name text,
+    doctor_specialization text,
+    doctor_current_hospital text
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'pg_temp'
+AS $$
+DECLARE
+    v_uid uuid := auth.uid();
+BEGIN
+    IF v_uid IS NULL THEN
+        RAISE EXCEPTION 'Not authenticated';
+    END IF;
+
+    RETURN QUERY
+    SELECT 
+        cr.id,
+        cr.status,
+        (cr.status = 'active' AND (cr.expires_at IS NULL OR cr.expires_at > now())) AS is_active,
+        cr.created_at,
+        cr.activated_at,
+        cr.expires_at,
+        dp.full_name,
+        dp.specialization,
+        dp.current_hospital
+    FROM public.care_relationships cr
+    LEFT JOIN public.doctor_profiles dp ON dp.user_id = cr.doctor_id
+    WHERE cr.patient_id = v_uid
+      AND cr.status IN ('pending', 'active');
+END;
+$$;
+
+-- Consent-expiry sweep. has_care_access() already refuses expired rows at read
+-- time; this function turns expiry into a state transition so the PowerSync
+-- doctor bucket (which scopes on status = 'active') closes and evicts the rows
+-- from the device. 'revoked' is reused rather than adding an 'expired' status;
+-- a non-null expires_at distinguishes an expiry from a manual revoke.
+--
+-- Executable by service_role only. Supabase default privileges grant EXECUTE to
+-- anon at creation and REVOKE FROM PUBLIC does not remove it, so anon and
+-- authenticated are revoked explicitly. Scheduled in Section 13.
+CREATE OR REPLACE FUNCTION public.expire_care_relationships()
+RETURNS integer
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'pg_temp'
+AS $$
+DECLARE
+    v_count integer;
+BEGIN
+    UPDATE public.care_relationships
+       SET status   = 'revoked',
+           ended_at = COALESCE(ended_at, now())
+     WHERE status = 'active'
+       AND expires_at IS NOT NULL
+       AND expires_at <= now();
+
+    GET DIAGNOSTICS v_count = ROW_COUNT;
+    RETURN v_count;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.expire_care_relationships() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.expire_care_relationships() FROM anon;
+REVOKE EXECUTE ON FUNCTION public.expire_care_relationships() FROM authenticated;
+GRANT  EXECUTE ON FUNCTION public.expire_care_relationships() TO service_role;
+
+
 -- =============================================================================
 -- SECTION 9 — TRIGGERS
 -- =============================================================================
@@ -655,9 +766,10 @@ CREATE POLICY scans_doctor_capture ON public.scan_results
     WITH CHECK (doctor_id = (SELECT auth.uid()) AND public.has_care_access(user_id));
 
 -- reports ----------------------------------------------------------------
--- Read only. Reports are written and deleted exclusively by the backend using
--- the service role, which bypasses RLS. An INSERT policy here would grant
--- nothing the application needs while allowing a client to forge a report row.
+-- The gateway reads and writes reports through a request-scoped client that
+-- runs as the caller (authenticated role), so these policies are enforced.
+-- Patients read, create, update and delete only their own report rows; doctors
+-- read reports of patients they hold live consent for.
 
 DROP POLICY IF EXISTS reports_patient_select ON public.reports;
 CREATE POLICY reports_patient_select ON public.reports
@@ -668,6 +780,22 @@ DROP POLICY IF EXISTS reports_doctor_select ON public.reports;
 CREATE POLICY reports_doctor_select ON public.reports
     FOR SELECT TO authenticated
     USING (public.has_care_access(user_id));
+
+DROP POLICY IF EXISTS reports_patient_insert ON public.reports;
+CREATE POLICY reports_patient_insert ON public.reports
+    FOR INSERT TO authenticated
+    WITH CHECK (user_id = (SELECT auth.uid()));
+
+DROP POLICY IF EXISTS reports_patient_update ON public.reports;
+CREATE POLICY reports_patient_update ON public.reports
+    FOR UPDATE TO authenticated
+    USING  (user_id = (SELECT auth.uid()))
+    WITH CHECK (user_id = (SELECT auth.uid()));
+
+DROP POLICY IF EXISTS reports_patient_delete ON public.reports;
+CREATE POLICY reports_patient_delete ON public.reports
+    FOR DELETE TO authenticated
+    USING (user_id = (SELECT auth.uid()));
 
 -- chat_messages ----------------------------------------------------------
 
@@ -741,6 +869,18 @@ CREATE POLICY scan_images_write ON storage.objects
         AND (storage.foldername(name))[1] = ((SELECT auth.uid()))::text
     );
 
+-- Owner-only delete. Text comparison on the first path segment, so a malformed
+-- segment yields false rather than a cast error. No care-relationship branch:
+-- a doctor cannot delete a patient's scan objects. Reports have no delete
+-- policy; their PDFs remain service-role managed.
+DROP POLICY IF EXISTS scan_images_delete ON storage.objects;
+CREATE POLICY scan_images_delete ON storage.objects
+    FOR DELETE TO authenticated
+    USING (
+        bucket_id = 'scan-images'
+        AND (storage.foldername(name))[1] = (SELECT auth.uid())::text
+    );
+
 -- Reports are written only by the backend service role, so there is no write
 -- policy here. The read policy accepts both a folder-based path and a flat
 -- {patient_id}_{name} form, so a change of naming convention does not require
@@ -785,6 +925,48 @@ BEGIN
 END $$;
 
 
+-- Supabase Realtime: profile tables are also broadcast to subscribed clients.
+-- The supabase_realtime publication is created by Supabase itself; tables are
+-- added only when the publication exists and does not already contain them.
+DO $$
+DECLARE
+    t text;
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
+        FOREACH t IN ARRAY ARRAY['doctor_profiles', 'patient_records'] LOOP
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_publication_tables
+                WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = t
+            ) THEN
+                EXECUTE format('ALTER PUBLICATION supabase_realtime ADD TABLE public.%I', t);
+            END IF;
+        END LOOP;
+    END IF;
+END $$;
+
+
 -- =============================================================================
--- END OF BASELINE
+-- SECTION 13 — SCHEDULED JOBS
+-- =============================================================================
+-- Every five minutes, move active care relationships past expires_at to
+-- 'revoked' (see expire_care_relationships in Section 8). Re-scheduling under
+-- the same name replaces the existing job, so this block is safe to re-run.
+-- pg_cron is absent only when Section 1 was explicitly told to allow it.
+
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
+        PERFORM cron.schedule(
+            'expire-care-relationships',
+            '*/5 * * * *',
+            'SELECT public.expire_care_relationships();'
+        );
+    ELSE
+        RAISE WARNING 'Skipped scheduling expire-care-relationships: pg_cron is not installed.';
+    END IF;
+END $$;
+
+
+-- =============================================================================
+-- END OF SCHEMA
 -- =============================================================================

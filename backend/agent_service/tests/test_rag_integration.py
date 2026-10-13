@@ -14,14 +14,13 @@ _repo_root = Path(__file__).resolve().parents[2]
 if _repo_root.name == "backend":
     _repo_root = _repo_root.parent
 schema_dir = _repo_root / "schema"
-baseline_files = sorted(schema_dir.glob("0001_*.sql"))
-if len(baseline_files) != 1:
-    files_found = [f.name for f in schema_dir.iterdir()]
+SCHEMA_PATH = schema_dir / "mediscanx_schema.sql"
+if not SCHEMA_PATH.is_file():
+    files_found = sorted(f.name for f in schema_dir.iterdir()) if schema_dir.is_dir() else []
     raise FileNotFoundError(
-        f"Expected exactly one baseline schema matching 0001_*.sql in {schema_dir}, "
-        f"but found {len(baseline_files)}. Directory contents: {files_found}"
+        f"Expected the consolidated schema at {SCHEMA_PATH}. "
+        f"Directory contents: {files_found}"
     )
-SCHEMA_PATH = baseline_files[0]
 
 
 @pytest.fixture(scope="module")
@@ -50,7 +49,9 @@ async def db_pool(postgres_container):
         await conn.execute("CREATE SCHEMA IF NOT EXISTS auth;")
         await conn.execute("CREATE TABLE IF NOT EXISTS auth.users (id UUID PRIMARY KEY, email TEXT, raw_user_meta_data JSONB);")
         await conn.execute("CREATE OR REPLACE FUNCTION auth.uid() RETURNS UUID AS $$ SELECT '00000000-0000-0000-0000-000000000000'::uuid $$ LANGUAGE sql;")
-        await conn.execute("CREATE ROLE authenticated NOLOGIN;")
+        # The three Supabase API roles: the schema grants and revokes on them.
+        for role in ("anon", "authenticated", "service_role"):
+            await conn.execute(f"CREATE ROLE {role} NOLOGIN;")
         
         # Create storage schema to satisfy Supabase dependencies
         await conn.execute("CREATE SCHEMA IF NOT EXISTS storage;")
@@ -60,6 +61,10 @@ async def db_pool(postgres_container):
         
         # Set search path so vector type is found when it is created in extensions
         await conn.execute("SET search_path TO public, extensions, auth;")
+
+        # The pgvector image has no pg_cron. The schema refuses to build without it
+        # unless this disposable database opts out explicitly (no expiry job is scheduled).
+        await conn.execute("SET mediscanx.allow_missing_pg_cron = 'on';")
         
         # Apply full schema
         with open(SCHEMA_PATH, "r") as f:
