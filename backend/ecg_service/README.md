@@ -1,87 +1,96 @@
-# ECG Diagnostic Microservice
+# ecg_service
 
-## Domain Summary
+ECG inference for MediScanX. It turns a **photo of a 12-lead paper ECG** into digital signals, classifies them into the five PTB-XL superclasses with a dual-branch CNN-BiLSTM, and returns a 1-D Grad-CAM saliency overlay. It also accepts raw WFDB recordings. Internal only; the gateway calls it.
 
-The ECG Service is a production-grade microservice for **12-lead Electrocardiograms (ECGs) inference**. It utilizes a specialized CNN-BiLSTM hybrid architecture optimized for identifying and classifying cardiac pathologies. The service provides high-performance, asynchronous diagnostics coupled with 1D Grad-CAM visual explainability to assist medical professionals in identifying cardiac anomalies.
+FastAPI · Python 3.11 · PyTorch / PyTorch Lightning · OpenCV · SciPy · wfdb · onnxruntime (optional)
 
-## Quickstart Local Reproducibility
+## Pipeline
 
-To run the application locally, use `uv` for lightning-fast dependency management and execution:
-
-```bash
-# Navigate to the service root
-cd ecg_service
-
-# Install dependencies and start the service on port 8002
-PYTHONPATH=src uv run uvicorn app.main:app --host 0.0.0.0 --port 8002
+```
+photo ─► grid suppression ─► layout slicing (12 lead bands) ─► waveform extraction ─► resample
+      ─► morphology (12 × 250) + rhythm (lead II, 1 × 1000) + amplitudes (12)
+      ─► DualBranchECGClassifier ─► per-class sigmoid + thresholds ─► 1-D Grad-CAM
 ```
 
-The API will be available at `http://localhost:8002`. Interactive Swagger documentation can be accessed at `http://localhost:8002/docs`.
+**Digitiser** (`src/app/engine/digitizer/`):
 
-## Docker Deployment
+| Stage | File | What it does |
+|---|---|---|
+| Grid suppression | `grid_suppression.py` | removes the pink/red paper grid |
+| Layout slicing | `layout_slicer.py` | finds lead bands and crops the 12 leads (footer excluded) |
+| Waveform extraction | `waveform_extractor.py` | traces the ink column by column, enforces continuity, measures coverage |
+| Orchestration | `pipeline.py` | runs the stages and fails closed |
 
-The application is fully containerized using a multi-stage Docker build optimized for Python with `uv`.
+Each lead must reach `min_coverage = 0.65` (65 % of columns with a detected trace). If any lead fails, the request returns **422** with the failed leads and retake guidance instead of classifying a degraded signal.
 
-To build the image locally:
+## Model
 
-```bash
-docker build -t mediscanx/ecg-service .
+`DualBranchECGClassifier` (`src/app/models/cnn_bilstm.py`):
+
+| Branch | Input | Layers | Output |
+|---|---|---|---|
+| Morphology | 12 leads × 250 samples (2.5 s @ 100 Hz) | Conv1d 64 → 128 → 256 + BiLSTM | 128-d |
+| Rhythm | lead II × 1000 samples (10 s) | Conv1d 32 → 64 → 128 + BiLSTM | 64-d |
+| Amplitude | 12 peak-to-peak voltages | Linear 12 → 32 + BN + ReLU | 32-d |
+| Fusion head | concat 224 | Linear 128 → dropout → 5 logits | NORM · MI · STTC · CD · HYP |
+
+The amplitude branch restores absolute voltage, which signal normalisation removes and which hypertrophy depends on.
+
+| | |
+|---|---|
+| Training data | PTB-XL (21,837 records) + Georgia 12-lead (10,344), trained jointly |
+| Thresholds | NORM 0.51 · MI 0.43 · STTC 0.49 · CD 0.52 · HYP 0.50 (fold 9) |
+| Validation (fold 9) | macro AUROC 0.8940, macro F1 0.7049 |
+| External (Chapman-Shaoxing, 9,758 records) | macro AUROC 0.7370; normal-vs-abnormal AUROC 0.7627, precision 0.9538, sensitivity 0.6029 |
+| Latency | ~35 ms per recording on CPU |
+
+Fold 9 also chose the thresholds, so the validation figures are optimistic; Chapman-Shaoxing is fully external. There is no on-device ECG model.
+
+## Endpoints
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/predict` | multipart: either `file` (PNG/JPEG photo) or `wfdb_files` (a `.dat` + `.hea` pair); form `top_k` (default 5); query `xai` (default true) |
+| GET | `/healthz` | 200 once a model backend is loaded |
+| GET | `/` | service metadata |
+
+```json
+{
+  "predictions": [
+    {"label": "MI", "class_idx": 1, "confidence": 0.81, "above_threshold": true,
+     "threshold": 0.43, "overlay_img": "<base64 PNG>", "overlay_lead": "II"}
+  ],
+  "predicted_class": "MI",
+  "confidence": 0.81,
+  "gradcam_overlay": "<base64 PNG>",
+  "inference_time_ms": 35.2,
+  "patient_id": "<temp file name>"
+}
 ```
 
-To run the container:
+## Configuration
+
+| Variable | Default (container) |
+|---|---|
+| `ECG_CKPT_PATH` | `/models/mediscanx-multisource-epoch=00-val_macro_f1=0.7049.ckpt` |
+| `ECG_ONNX_PATH` | optional ONNX export; used only if present |
+| `CLASSIFICATION_THRESHOLD` | fallback threshold |
+| `DEVICE` | `cpu` or `cuda` |
+
+Compose mounts `weights/` at `/models` and a named volume for digitiser diagnostics.
+
+## Run and test
 
 ```bash
-docker run -p 8002:8002 mediscanx/ecg-service
+uv sync --all-extras
+uv run uvicorn app.main:app --app-dir src --port 8002
+curl -F "file=@ecg.jpg" http://localhost:8002/predict
+
+uv run pytest -q                      # 15 passed
 ```
 
-## CI Pipeline
+## Known limitations
 
-This service includes a comprehensive CI pipeline using GitHub Actions, triggered on pull requests to the `dev` and `main` branches. It incorporates:
-
-- **Mocked Pytest Suite:** Runs the unit and integration tests, bypassing disk I/O for heavy models.
-- **Dual-layer PyTorch Caching:** Fast restoration of Torch and Torchvision CPU wheels via `astral-sh/setup-uv`.
-- **Multi-stage Docker Dry-Run:** Exercises the `Dockerfile` to catch build errors and missing dependencies without pushing to a registry.
-
-## Payload Schemas Matrix
-
-The service exposes a multipart endpoint `/predict` for ECG signal analysis.
-
-### Input Schema (Multipart FormData)
-
-| Field   | Type                                                               | Required | Description                                                                        |
-| ------- | ------------------------------------------------------------------ | -------- | ---------------------------------------------------------------------------------- |
-| `files` | `image/jpeg`, `image/jpg`, `image/png`, `application/octet-stream` | **Yes**  | A single photograph of a printed ECG strip, or two WFDB files (`.dat` and `.hea`). |
-| `xai`   | `boolean`                                                          | No       | Set to `true` to return a Grad-CAM heatmap visualization (default: `false`).       |
-
-### Output JSON Payload Schema
-
-| Field                       | Type     | Description                                                                    |
-| --------------------------- | -------- | ------------------------------------------------------------------------------ |
-| `predictions`               | `array`  | List of top-k classification predictions.                                      |
-| `predictions[].label`       | `string` | Full clinical name of the predicted class (e.g., "NORM").                      |
-| `predictions[].class_idx`   | `int`    | Internal integer index of the predicted class.                                 |
-| `predictions[].confidence`  | `float`  | Sigmoid multi-label probability score.                                         |
-| `predictions[].overlay_img` | `string` | Base64-encoded PNG of the 1D Grad-CAM heatmap overlaid on the original signal. |
-| `predicted_class`           | `string` | The highest confidence clinical label prediction.                              |
-| `predicted_confidence`      | `float`  | The highest confidence clinical label score.                                   |
-| `gradcam_overlay`           | `string` | Base64-encoded PNG of the highest confidence Grad-CAM heatmap.                 |
-| `inference_time_ms`         | `float`  | Total time taken for inference.                                                |
-| `patient_id`                | `string` | Parsed from the incoming file name (for correlation).                          |
-
-## Custom Error/Exception Mapping Framework
-
-The microservice employs a strict Domain-Driven Design (DDD) exception architecture. Domain exceptions are completely decoupled from the HTTP layer and are mapped to standard JSON error responses via a global `ExceptionRegistry`.
-
-To maintain perfect documentation parity, the Exception Hierarchy relies on the exact exception class names created by the Optimization Subagent.
-
-| Exception Class             | HTTP Status                 | Trigger / Description                                             |
-| --------------------------- | --------------------------- | ----------------------------------------------------------------- |
-| `SignalProcessingError`     | `422 Unprocessable Entity`  | General pipeline failure during digital/optical processing.       |
-| `SignalLengthMismatchError` | `422 Unprocessable Entity`  | Raised when the ECG signal length does not match expected length. |
-| `InvalidLeadCountError`     | `400 Bad Request`           | Raised when the number of ECG leads is invalid.                   |
-| `ECGFileReadError`          | `422 Unprocessable Entity`  | Supplied WFDB or image files cannot be opened or parsed.          |
-| `InvalidSignalShapeError`   | `422 Unprocessable Entity`  | Preprocessed tensor violates the required `(1, 12, 500)` shape.   |
-| `ECGInferenceError`         | `500 Internal Server Error` | General inference failure (PyTorch or generic execution errors).  |
-| `ONNXInferenceError`        | `500 Internal Server Error` | Inference fails inside the ONNX Runtime session.                  |
-| `ECGModelNotFoundError`     | `503 Service Unavailable`   | Startup fails because ONNX/PyTorch model artifacts are missing.   |
-| `ECGEngineNotReadyError`    | `503 Service Unavailable`   | A request is made before the ML engine has fully initialized.     |
+- The digitiser recovers no physical time base from the paper grid; the coverage gate is an engineering parameter.
+- The full photo-to-diagnosis path is not evaluated end to end; reported metrics are on digital signals.
+- Per-site threshold recalibration is needed to raise external sensitivity.
